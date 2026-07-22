@@ -1,0 +1,17 @@
+# RTSP 자격증명·PLC IP 포함 — 절대 커밋 금지
+.env
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 모델 바이너리(수백 MB) — 볼륨 마운트로 주입
+model_files/*.onnx
+model_files/*.pt
+
+# 24MB 사내 디자인 가이드 — 이 앱과 무관
+문서/*.pdf
+
+*.mp4
+*.log

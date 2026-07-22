@@ -1,0 +1,3 @@
+모델이 학습할 때 네 가지 물체의 특징을 각각 학습해야 정확도가 올라가서, YOLO로 각 물체는 구분하되 출력만 trash로 통일시켜야 합니다. 이 때 best.pt는 파라미터값만 가지고 있어 라벨 출력을 하나로 통일하는 역할을 못하고, 이는 코드 단에서 처리해주어야 합니다.
+
+따라서 이걸 한 번에 처리할 수 있는 best_trash.torchscript.pt  와 best_trash.onnx 로 공유드립니다.(best_trash.torchscript.pt 는 yolov7 레포가 없어도 torch만 있다면 추론할 수 있는 방식이라고 합니다. 즉, torch.jit.load() 한 줄이면 로드되는, 파일 자체가 완성된 모델입니다.)

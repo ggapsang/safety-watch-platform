@@ -1,0 +1,14 @@
+# 리눅스 산업용 PC 배포용 오버레이 — 상세기획안 3장의 host 네트워크 구성.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+#
+# host 모드에서는 ports 매핑이 무시되므로 대시보드는 DASHBOARD_PORT 로 직접 노출된다.
+# ⚠ Docker Desktop for Windows/macOS 에서는 host 네트워크로 포트 게시가 되지 않는다.
+#    Windows 데모는 기본 docker-compose.yml(bridge) 을 그대로 쓸 것.
+services:
+  trash-detector:
+    network_mode: host
+    ports: !reset []
+    environment:
+      DASHBOARD_HOST: "0.0.0.0"
+      DASHBOARD_PORT: "${DASHBOARD_PUBLISH_PORT:-1235}"

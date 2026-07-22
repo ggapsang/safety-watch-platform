@@ -1,0 +1,15 @@
+# 공통
+numpy>=1.24,<3
+opencv-python-headless>=4.9        # 로컬 --show 로 창을 띄우려면 opencv-python 으로 교체
+
+# 추론 백엔드 (1순위: ONNX Runtime)
+# GPU:  onnxruntime-gpu  (CUDA 12.x + cuDNN 9 필요 — Docker 이미지가 제공)
+# CPU:  onnxruntime      (개발/폴백용)
+onnxruntime-gpu>=1.20 ; platform_machine == "x86_64"
+
+# 대체 백엔드 (TorchScript) — 필요할 때만 설치. 이미지가 크게 늘어난다.
+# torch>=2.6 --index-url https://download.pytorch.org/whl/cu124
+
+# 대시보드
+fastapi>=0.110
+uvicorn>=0.29
