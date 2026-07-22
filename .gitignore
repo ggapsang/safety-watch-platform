@@ -15,3 +15,7 @@ model_files/*.pt
 
 *.mp4
 *.log
+
+# 대시보드에서 저장한 런타임 설정 — 카메라/PLC IP 등 현장 값 포함
+runtime/
+recordings/

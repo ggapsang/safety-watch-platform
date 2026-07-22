@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -38,7 +38,11 @@ class Detection:
     y1: float
     x2: float
     y2: float
-    score: float
+    score: float              # 최종 confidence = obj * cls
+    obj: float = 0.0          # objectness (sigmoid 적용됨)
+    cls: float = 0.0          # 클래스 점수 = 4클래스의 max (그래프의 ReduceMax 결과)
+    raw_scores: list[float] = field(default_factory=list)   # 후처리 전 4클래스 점수
+    raw_label: str = ""       # 그 중 argmax 라벨 — '원래 어떤 물체로 봤는지'
 
     @property
     def area(self) -> float:
@@ -185,13 +189,41 @@ class _Backend:
     input_name: str = ""
     input_dtype: np.dtype = np.dtype(np.float32)
     device: str = "cpu"
+    has_raw: bool = False
 
-    def infer(self, blob: np.ndarray) -> np.ndarray:
+    def infer(self, blob: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+        """(최종 출력, 후처리 전 4클래스 텐서 or None)"""
         raise NotImplementedError
 
 
+def _model_bytes_with_raw_output(path: Path, raw_name: str) -> bytes | None:
+    """ReduceMax 직전 텐서를 그래프 출력에 추가한 모델 바이트를 만든다.
+
+    실패하면 None 을 반환하고 호출자가 원본 경로로 폴백한다.
+    """
+    try:
+        import onnx
+    except ImportError:
+        log.warning("onnx 미설치 — 후처리 전 4클래스 라벨 노출을 건너뜁니다")
+        return None
+    try:
+        model = onnx.load(str(path))
+        if any(o.name == raw_name for o in model.graph.output):
+            return model.SerializeToString()
+        vi = next((v for v in model.graph.value_info if v.name == raw_name), None)
+        if vi is None:
+            log.warning("그래프에 '%s' 텐서가 없습니다 — 4클래스 노출 생략", raw_name)
+            return None
+        model.graph.output.append(vi)
+        return model.SerializeToString()
+    except Exception as exc:                                   # noqa: BLE001
+        log.warning("4클래스 텐서 노출 실패(%s) — 원본 모델로 진행", exc)
+        return None
+
+
 class OnnxBackend(_Backend):
-    def __init__(self, path: Path, device: str = "cuda") -> None:
+    def __init__(self, path: Path, device: str = "cuda", expose_raw: bool = False,
+                 raw_tensor_name: str = "") -> None:
         import onnxruntime as ort
 
         available = ort.get_available_providers()
@@ -203,17 +235,30 @@ class OnnxBackend(_Backend):
 
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.session = ort.InferenceSession(str(path), sess_options=so, providers=providers)
+
+        source: str | bytes = str(path)
+        if expose_raw and raw_tensor_name:
+            patched = _model_bytes_with_raw_output(path, raw_tensor_name)
+            if patched is not None:
+                source = patched
+
+        self.session = ort.InferenceSession(source, sess_options=so, providers=providers)
         inp = self.session.get_inputs()[0]
         self.input_name = inp.name
         self.input_dtype = np.dtype(np.float16) if "float16" in inp.type else np.dtype(np.float32)
-        self.output_name = self.session.get_outputs()[0].name
+        outs = self.session.get_outputs()
+        self.output_name = outs[0].name
+        self.raw_name = raw_tensor_name if any(o.name == raw_tensor_name for o in outs) else ""
+        self.has_raw = bool(self.raw_name)
         self.device = "cuda" if "CUDAExecutionProvider" in self.session.get_providers() else "cpu"
-        log.info("ONNX 백엔드: providers=%s input=%s%s output=%s",
-                 self.session.get_providers(), inp.name, inp.shape, self.output_name)
+        log.info("ONNX 백엔드: providers=%s input=%s%s output=%s raw=%s",
+                 self.session.get_providers(), inp.name, inp.shape, self.output_name,
+                 self.raw_name or "미노출")
 
-    def infer(self, blob: np.ndarray) -> np.ndarray:
-        return self.session.run([self.output_name], {self.input_name: blob})[0]
+    def infer(self, blob: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+        names = [self.output_name] + ([self.raw_name] if self.has_raw else [])
+        outs = self.session.run(names, {self.input_name: blob})
+        return outs[0], (outs[1] if self.has_raw else None)
 
 
 class TorchScriptBackend(_Backend):
@@ -234,14 +279,14 @@ class TorchScriptBackend(_Backend):
         self.input_dtype = np.dtype(np.float16) if self.fp16 else np.dtype(np.float32)
         log.info("TorchScript 백엔드: device=%s fp16=%s", self.device, self.fp16)
 
-    def infer(self, blob: np.ndarray) -> np.ndarray:
+    def infer(self, blob: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         torch = self.torch
         with torch.no_grad():
             tensor = torch.from_numpy(blob).to(self.device)
             out = self.model(tensor)
             if isinstance(out, (tuple, list)):
                 out = out[0]
-            return out.detach().float().cpu().numpy()
+            return out.detach().float().cpu().numpy(), None
 
 
 # --------------------------------------------------------------------- Detector
@@ -258,7 +303,8 @@ class Detector:
             raise FileNotFoundError(f"모델 파일이 없습니다: {path}")
 
         if m.backend == "onnx":
-            self.backend: _Backend = OnnxBackend(path, m.device)
+            self.backend: _Backend = OnnxBackend(path, m.device, m.expose_raw_classes,
+                                                 m.raw_tensor_name)
         else:
             self.backend = TorchScriptBackend(path, m.device, m.fp16)
 
@@ -266,6 +312,10 @@ class Detector:
         self.infer_mode = m.infer_mode
         self._diagnosed = False
         self.last_infer_ms = 0.0
+
+    def class_name(self, index: int) -> str:
+        names = self.cfg.model.class_names
+        return names[index] if index < len(names) else f"cls{index}"
 
     # ------------------------------------------------------------- 진단 로그
 
@@ -327,7 +377,7 @@ class Detector:
         blob, meta = self.preprocess(frame)
 
         t0 = time.perf_counter()
-        pred = self.backend.infer(blob)
+        pred, raw = self.backend.infer(blob)
         self.last_infer_ms = (time.perf_counter() - t0) * 1000.0
 
         pred = np.asarray(pred, dtype=np.float32)
@@ -337,6 +387,8 @@ class Detector:
         flat = pred.reshape(-1, pred.shape[-1])
         if self.infer_mode == "raw":
             flat = decode_raw(flat, self.imgsz)
+        raw_flat = np.asarray(raw, dtype=np.float32).reshape(-1, raw.shape[-1]) \
+            if raw is not None else None
 
         obj = flat[:, 4]
         cls = flat[:, 5] if flat.shape[1] > 5 else np.ones_like(obj)
@@ -346,21 +398,30 @@ class Detector:
         keep_mask = scores >= conf_t
         if not np.any(keep_mask):
             return []
-        boxes = xywh2xyxy(flat[keep_mask, :4].copy())
-        scores = scores[keep_mask]
+        # 원본 행 번호를 끝까지 들고 가야 raw 텐서에서 4클래스 점수를 찾을 수 있다.
+        rows = np.nonzero(keep_mask)[0]
+        boxes = xywh2xyxy(flat[rows, :4].copy())
+        kept_scores = scores[rows]
 
-        keep = nms(boxes, scores, self.cfg.model.iou_threshold)[: self.cfg.model.max_det]
+        keep = nms(boxes, kept_scores, self.cfg.model.iou_threshold)[: self.cfg.model.max_det]
+        rows = rows[keep]
         boxes = self._scale_back(boxes[keep], meta, w, h)
-        scores = scores[keep]
+        kept_scores = kept_scores[keep]
 
         roi = resolve_roi(self.cfg.logic.roi_polygon, w, h)
         dets: list[Detection] = []
-        for (x1, y1, x2, y2), s in zip(boxes, scores):
+        for (x1, y1, x2, y2), s, row in zip(boxes, kept_scores, rows):
             if roi:
                 cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
                 if not point_in_polygon(cx, cy, roi):
                     continue                     # 컨베이어 영역 밖 오탐 제거
-            dets.append(Detection(float(x1), float(y1), float(x2), float(y2), float(s)))
+            det = Detection(float(x1), float(y1), float(x2), float(y2), float(s),
+                            obj=float(obj[row]), cls=float(cls[row]))
+            if raw_flat is not None and raw_flat.shape[1] > 5:
+                per_class = raw_flat[row, 5:]
+                det.raw_scores = [float(v) for v in per_class]
+                det.raw_label = self.class_name(int(per_class.argmax()))
+            dets.append(det)
         return dets
 
 

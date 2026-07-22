@@ -150,12 +150,67 @@ IO 실패 시 close 후 **1회 자동 재연결**, `ECONNREFUSED` 는 20→200ms
 
 ## 7. 대시보드
 
-`http://<PC>:8080`
+`http://<PC>:1235` (호스트 게시 포트 = `DASHBOARD_PUBLISH_PORT`)
 
-- 라이브 뷰(MJPEG) + 탐지 박스 + ROI 폴리곤 오버레이
-- 결과 코드(0/1/2)와 한글 라벨, 9매트릭스 카테고리, max_count / max_area
-- 영상·PLC 연결 상태, 마지막 write 내역, fps / 추론 지연
-- 엔드포인트: `/` `/video` `/api/status` `/healthz` (외부 CDN 의존 없음)
+3단 구성이며 외부 CDN 의존이 없다.
+
+| 영역 | 내용 |
+|:---|:---|
+| **좌** | 라이브 뷰(MJPEG) + 탐지 박스 + ROI 폴리곤 + 결과 오버레이 |
+| **중앙 위** | 판정 결과 코드(0/1/2/9) · 한글 라벨 · 라인 동작 · 현재 값(9매트릭스, max_count, max_area, PLC write 성공/실패) |
+| **중앙 아래** | **시스템 로그** — PLC write, 판정, 재연결 + 검출 상세 |
+| **우** | **녹화**(최대 60초, 다운로드) · **최근 판독 캡처 8장**(최신순, 오래된 것부터 밀어냄) |
+| **우상단** | ⚙ **설정** — 카메라/PLC/판정 기준을 재시작 없이 변경 |
+
+### 7.1 검출 상세 로그 — '후처리 전에 무엇으로 봤는지'
+
+```
+#1 conf=0.293 (obj=0.293 cls=0.999) box=(751,1595)-(1189,2150)
+   | 후처리전=cls3 [cls0=0.000 cls1=0.002 cls2=0.004 cls3=0.999]
+```
+
+- `conf` = 최종 confidence = `obj × cls`
+- 이 모델은 그래프 안에서 **4클래스를 `ReduceMax` 로 합쳐** trash 단일 출력을 만든다.
+  최종 출력만으로는 원래 어떤 물체였는지 알 수 없다.
+- 그래서 앱은 기동 시 **`ReduceMax` 직전 텐서(`[1,25200,9]`)를 그래프 출력에 추가**해
+  4클래스 원본 점수와 argmax 를 되살린다 (`EXPOSE_RAW_CLASSES=true`, 기본값).
+  - `onnx` 패키지가 없거나 텐서를 못 찾으면 경고만 남기고 이 표시만 생략된다.
+  - 클래스 이름은 모델에 없다. `CLASS_NAMES=병,캔,비닐,종이` 로 지정하면 그 이름으로 표시된다.
+  - TorchScript 백엔드에서는 지원하지 않는다(ONNX 전용).
+
+### 7.2 설정 (재시작 불필요)
+
+| 그룹 | 항목 |
+|:---|:---|
+| 카메라 | IP · 포트 · ID · 비밀번호 · 스트림 경로 → 저장 시 RTSP 재연결 |
+| PLC | IP · 포트 → 저장 시 재접속 후 `D8100=1` 재전송 |
+| 판정 | confidence · NMS IoU · count low/high · area low/high(%) · **cooldown(초)** |
+
+- 저장하면 `runtime/settings.json`(볼륨 마운트)에 남아 **재시작 후에도 유지**된다.
+- 잘못된 값(`count_low > count_high` 등)은 400 으로 거부되고 기존 설정이 유지된다.
+- `GET /api/settings` 응답에는 RTSP 비밀번호를 담지 않는다(대시보드에 인증이 없다).
+  비밀번호 칸을 비워두고 저장하면 기존 값이 유지된다.
+
+### 7.3 녹화
+
+- ● 녹화 버튼 → **최대 60초**, 도달 시 자동 정지. 정지 후 목록에서 mp4 다운로드.
+- 1280 폭으로 축소 저장(4K 원본은 파일이 과도하게 커진다), 코덱 `mp4v`, 오버레이 포함.
+- 파일은 호스트 `recordings/` 에 그대로 쌓이며 **최근 5개**만 보관한다.
+
+### 7.4 엔드포인트
+
+```
+GET  /                  대시보드            GET  /video             MJPEG 스트림
+GET  /api/status        현재 상태           GET  /api/logs?since=N  시스템 로그(증분)
+GET  /api/captures      캡처 메타 8장       GET  /capture/{id}.jpg  캡처 이미지
+GET  /api/settings      현재 설정           POST /api/settings      설정 변경
+POST /api/record/start  녹화 시작           POST /api/record/stop   녹화 정지
+GET  /api/recordings    녹화 목록/상태      GET  /recording/{name}  mp4 다운로드
+GET  /healthz           헬스체크
+```
+
+> ⚠ 대시보드에는 **인증이 없다.** 설정 변경·녹화 API 가 열려 있으므로 신뢰된 산업망
+> 안에서만 노출할 것. 외부에 열어야 한다면 리버스 프록시로 인증을 앞단에 둘 것.
 
 ---
 
@@ -169,10 +224,13 @@ app/detector.py         백엔드 추상화 · letterbox/stretch · NMS · ROI �
 app/trash_logic.py      2초 sliding window · 9매트릭스 · cooldown
 app/xgt_client.py       XGT 전용 프로토콜 클라이언트
 app/plc.py              IF 맵 래퍼 (D8000/8001/8100/8101)
-app/state.py            추론 루프 ↔ 대시보드 공유 상태
-app/dashboard.py        FastAPI + MJPEG 대시보드
-tests/test_app.py       자체 검증 21건 (외부 의존성 없음)
+app/state.py            공유 상태 · 로그 링버퍼 · 캡처 8장 링버퍼
+app/recorder.py         최대 60초 mp4 녹화
+app/dashboard.py        FastAPI 대시보드 (MJPEG · 로그 · 캡처 · 설정 · 녹화)
+tests/test_app.py       자체 검증 37건 (외부 의존성 없음)
 tools/mock_plc.py       모의 XGT PLC 서버 (실 PLC 없이 왕복 리허설)
+runtime/settings.json   대시보드에서 저장한 설정 (볼륨, gitignore)
+recordings/             녹화 mp4 (볼륨, 최근 5개, gitignore)
 ```
 
 ## 8-1. 현재 검증 상태
@@ -182,7 +240,9 @@ tools/mock_plc.py       모의 XGT PLC 서버 (실 PLC 없이 왕복 리허설)
 | 모델 입출력 규격 (`[1,25200,6]`, decoded) | ✅ 그래프 파싱 + `--probe` 실행으로 확인 |
 | 전처리·NMS·좌표 역변환·ROI·판정·XGT 프레임 | ✅ 단위 테스트 21건 통과 |
 | 영상 → 추론 → 판정 루프 | ✅ 실카메라로 관통 확인 |
-| 대시보드 `/` `/video` `/api/status` `/healthz` | ✅ 실행 중 앱에 HTTP 호출로 확인 |
+| 대시보드 전체 엔드포인트(로그/캡처/설정/녹화 포함) | ✅ 실행 중 컨테이너에 HTTP 호출로 확인 |
+| 후처리 전 4클래스 노출 | ✅ `final.cls == max(raw[5:9])` 대조 + 실운전 로그 확인 |
+| 녹화 mp4 | ✅ 1280×720 21.8fps 재생 확인, 호스트 `recordings/` 에 생성 |
 | XGT 프레임/재연결 | ✅ 모의 PLC 서버 + 실 PLC 로 확인 |
 | **실제 RTSP 카메라 수신** | ✅ 192.168.5.52 profile2, 3840×2160 @30fps (Digest 인증 필요) |
 | **실제 PLC write** | ✅ 192.168.5.199:2004, D8100/D8101 write 성공 (실패 0) |

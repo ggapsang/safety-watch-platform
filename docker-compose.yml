@@ -18,9 +18,15 @@ services:
     environment:
       DASHBOARD_HOST: "0.0.0.0"
       DASHBOARD_PORT: "8080"
+      RUNTIME_CONFIG_PATH: "/app/runtime/settings.json"
+      RECORDINGS_DIR: "/app/recordings"
 
     volumes:
       - ./model_files:/app/model_files:ro
+      # 대시보드에서 저장한 설정 — 컨테이너 재시작 후에도 유지
+      - ./runtime:/app/runtime
+      # 녹화 mp4 — 호스트에서도 바로 열 수 있다
+      - ./recordings:/app/recordings
 
     deploy:
       resources:

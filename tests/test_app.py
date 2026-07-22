@@ -244,5 +244,129 @@ class TestPostprocess(unittest.TestCase):
         self.assertAlmostEqual(D.area_metric(dets, 1000, 1000, roi, "percent"), 4.0)
 
 
+class TestRtspAndSettings(unittest.TestCase):
+    def test_rtsp_roundtrip(self):
+        from app.config import build_rtsp, parse_rtsp
+
+        url = "rtsp://admin:p%40ss@192.168.5.52/profile2/media.smp"
+        d = parse_rtsp(url)
+        self.assertEqual((d["ip"], d["user"], d["password"], d["path"]),
+                         ("192.168.5.52", "admin", "p@ss", "/profile2/media.smp"))
+        self.assertEqual(build_rtsp(d), url)
+
+    def test_rtsp_nonstandard_port_and_no_credentials(self):
+        from app.config import build_rtsp, parse_rtsp
+
+        url = build_rtsp({"ip": "10.0.0.5", "port": 5554, "user": "", "password": "",
+                          "path": "/live"})
+        self.assertEqual(url, "rtsp://10.0.0.5:5554/live")
+        self.assertEqual(parse_rtsp(url)["port"], 5554)
+
+    def _cfg(self):
+        from app.config import AppConfig
+
+        cfg = AppConfig()
+        cfg.video.source = "rtsp://admin:secret@192.168.5.52/profile2/media.smp"
+        return cfg
+
+    def test_apply_settings_reports_changed_domains(self):
+        from app.config import apply_settings
+
+        cfg = self._cfg()
+        changed = apply_settings(cfg, {
+            "camera": {"ip": "192.168.5.60"},
+            "plc": {"host": "192.168.5.199", "port": 2004},
+            "judge": {"conf": 0.4, "cooldown": 12},
+        })
+        self.assertEqual(changed, {"camera", "judge"})       # plc 는 기본값과 동일 -> 변화 없음
+        self.assertIn("192.168.5.60", cfg.video.source)
+        self.assertEqual(cfg.model.conf_threshold, 0.4)
+        self.assertEqual(cfg.logic.cooldown_sec, 12)
+
+    def test_empty_password_keeps_existing(self):
+        from app.config import apply_settings, parse_rtsp
+
+        cfg = self._cfg()
+        apply_settings(cfg, {"camera": {"ip": "192.168.5.60", "password": "", "has_password": True}})
+        self.assertEqual(parse_rtsp(cfg.video.source)["password"], "secret")
+
+    def test_settings_dict_hides_password_by_default(self):
+        from app.config import settings_dict
+
+        cfg = self._cfg()
+        s = settings_dict(cfg)
+        self.assertEqual(s["camera"]["password"], "")
+        self.assertTrue(s["camera"]["has_password"])
+        self.assertEqual(settings_dict(cfg, reveal_password=True)["camera"]["password"], "secret")
+
+    def test_cooldown_minimum_is_enforced(self):
+        from app.config import apply_settings
+
+        cfg = self._cfg()
+        apply_settings(cfg, {"judge": {"cooldown": 0}})
+        self.assertEqual(cfg.logic.cooldown_sec, 1.0)         # validate() 가 최소 1초로 올린다
+
+    def test_invalid_thresholds_rejected(self):
+        from app.config import apply_settings
+
+        cfg = self._cfg()
+        with self.assertRaises(ValueError):
+            apply_settings(cfg, {"judge": {"count_low": 5, "count_high": 2}})
+
+
+class TestStateBuffers(unittest.TestCase):
+    def test_log_ring_is_incremental(self):
+        from app.state import SharedState
+
+        s = SharedState()
+        for i in range(3):
+            s.add_log("INFO", f"line{i}")
+        rows = s.logs_since(0)
+        self.assertEqual([r["msg"] for r in rows], ["line0", "line1", "line2"])
+        self.assertEqual([r["msg"] for r in s.logs_since(rows[1]["seq"])], ["line2"])
+
+    def test_captures_keep_only_latest_eight(self):
+        from app.state import MAX_CAPTURES, SharedState
+
+        s = SharedState()
+        for i in range(MAX_CAPTURES + 4):
+            s.add_capture(b"jpeg%d" % i, code=1, label="부분오염", category="M_L",
+                          det_count=1, top_score=0.5, raw_label="cls0")
+        lst = s.capture_list()
+        self.assertEqual(len(lst), MAX_CAPTURES)
+        self.assertEqual(lst[0]["id"], MAX_CAPTURES + 4)      # 최신순
+        self.assertNotIn("jpeg", lst[0])                      # 목록에는 바이트 미포함
+        self.assertEqual(s.capture_jpeg(lst[0]["id"]), b"jpeg11")
+        self.assertIsNone(s.capture_jpeg(1))                  # 밀려난 항목
+
+
+class TestRecorder(unittest.TestCase):
+    def test_path_traversal_is_blocked(self):
+        import tempfile
+
+        from app.recorder import Recorder
+
+        with tempfile.TemporaryDirectory() as d:
+            r = Recorder(Path(d))
+            for bad in ("../etc/passwd", "rec_../x.mp4", "notrec.mp4", "rec_x.txt",
+                        "sub/rec_a.mp4"):
+                self.assertIsNone(r.file_path(bad), bad)
+            self.assertIsNone(r.file_path("rec_missing.mp4"))  # 형식은 맞지만 없는 파일
+
+    def test_limit_is_capped_at_60s(self):
+        import tempfile
+
+        from app.recorder import MAX_SECONDS_CAP, Recorder
+
+        with tempfile.TemporaryDirectory() as d:
+            r = Recorder(Path(d))
+            st = r.start(seconds=600)
+            self.assertEqual(st["limit"], MAX_SECONDS_CAP)
+            with self.assertRaises(ValueError):
+                r.start()                                     # 중복 시작 거부
+            r.stop()
+            self.assertFalse(r.active)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

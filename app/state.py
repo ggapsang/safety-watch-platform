@@ -7,11 +7,16 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
+
+MAX_LOG_LINES = 400
+MAX_CAPTURES = 8          # 최신 8장만 유지하고 오래된 것부터 밀어낸다
 
 
 @dataclass
@@ -49,12 +54,69 @@ class Snapshot:
     infer_mode: str = ""
 
 
+@dataclass
+class Capture:
+    """'마지막으로 판독한' 라벨 걸린 캡처 1장."""
+
+    id: int
+    ts: float
+    code: int
+    label: str
+    category: str
+    det_count: int
+    top_score: float
+    raw_label: str
+    jpeg: bytes = b""
+
+
 class SharedState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._snap = Snapshot()
         self._jpeg: bytes | None = None
         self._jpeg_seq = 0
+        self._logs: deque[dict] = deque(maxlen=MAX_LOG_LINES)
+        self._log_seq = 0
+        self._captures: deque[Capture] = deque(maxlen=MAX_CAPTURES)
+        self._capture_seq = 0
+
+    # ------------------------------------------------------------------- 로그
+
+    def add_log(self, level: str, msg: str, source: str = "app") -> None:
+        with self._lock:
+            self._log_seq += 1
+            self._logs.append({
+                "seq": self._log_seq,
+                "t": time.strftime("%H:%M:%S"),
+                "level": level,
+                "source": source,
+                "msg": msg,
+            })
+
+    def logs_since(self, since: int = 0, limit: int = 200) -> list[dict]:
+        with self._lock:
+            return [e for e in self._logs if e["seq"] > since][-limit:]
+
+    # ------------------------------------------------------------------- 캡처
+
+    def add_capture(self, jpeg: bytes, **meta) -> None:
+        with self._lock:
+            self._capture_seq += 1
+            self._captures.append(Capture(id=self._capture_seq, ts=time.time(),
+                                          jpeg=jpeg, **meta))
+
+    def capture_list(self) -> list[dict]:
+        """최신순 메타데이터(이미지 바이트 제외)."""
+        with self._lock:
+            return [{k: v for k, v in vars(c).items() if k != "jpeg"}
+                    for c in reversed(self._captures)]
+
+    def capture_jpeg(self, capture_id: int) -> bytes | None:
+        with self._lock:
+            for c in self._captures:
+                if c.id == capture_id:
+                    return c.jpeg
+        return None
 
     def update(self, **kwargs) -> None:
         with self._lock:
@@ -77,8 +139,27 @@ class SharedState:
             return self._jpeg_seq, self._jpeg
 
 
-def encode_jpeg(frame: np.ndarray, quality: int = 75) -> bytes | None:
+def encode_jpeg(frame: np.ndarray, quality: int = 75, max_width: int = 0) -> bytes | None:
     import cv2
 
+    if max_width and frame.shape[1] > max_width:
+        scale = max_width / frame.shape[1]
+        frame = cv2.resize(frame, (max_width, int(round(frame.shape[0] * scale))),
+                           interpolation=cv2.INTER_AREA)
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     return buf.tobytes() if ok else None
+
+
+class StateLogHandler(logging.Handler):
+    """앱 로그를 대시보드 로그 패널로 흘려보낸다."""
+
+    def __init__(self, state: SharedState) -> None:
+        super().__init__()
+        self.state = state
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.state.add_log(record.levelname, record.getMessage(),
+                               record.name.replace("app.", ""))
+        except Exception:                                       # noqa: BLE001
+            pass

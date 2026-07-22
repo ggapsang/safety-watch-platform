@@ -82,6 +82,24 @@ class PlcController:
             log.error("PLC 초기 연결 실패(추론은 계속, write 시 재시도): %s", exc)
         self.set_pc_ready(1)
 
+    def reconfigure(self, cfg) -> None:
+        """대시보드에서 PLC IP/포트가 바뀌었을 때 연결을 새로 맺는다."""
+        if self.client is not None:
+            self.client.close()
+        self.cfg = cfg.plc
+        self.enabled = self.cfg.enabled
+        self.client = XgtClient(self.cfg.host, self.cfg.port, self.cfg.cpu_info,
+                                self.cfg.timeout_sec) if self.enabled else None
+        self.last_error = ""
+        log.info("PLC 재설정: %s:%d (enabled=%s)", self.cfg.host, self.cfg.port, self.enabled)
+        if self.enabled:
+            try:
+                self.client.connect()  # type: ignore[union-attr]
+            except XgtError as exc:
+                self.last_error = str(exc)
+                log.error("PLC 재연결 실패(write 시 재시도): %s", exc)
+            self.set_pc_ready(1)
+
     def shutdown(self) -> None:
         if not self.enabled or self.client is None:
             return

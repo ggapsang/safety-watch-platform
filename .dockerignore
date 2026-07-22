@@ -1,6 +1,8 @@
 # 모델(292MB)·영상은 볼륨으로 주입한다 — 빌드 컨텍스트에 넣지 않는다
 model_files/
 samples/
+runtime/
+recordings/
 
 .env
 .git/

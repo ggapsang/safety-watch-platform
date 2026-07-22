@@ -6,9 +6,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit
+
+log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,6 +99,12 @@ class ModelConfig:
     conf_threshold: float = 0.25
     iou_threshold: float = 0.45
     max_det: int = 300
+    # 이 모델은 그래프 안에서 4클래스를 ReduceMax 로 합쳐 trash 단일 출력을 만든다.
+    # ReduceMax 직전 텐서([1,25200,9])를 추가 출력으로 노출하면 '후처리 전에 어떤
+    # 물체로 봤는지'를 되살릴 수 있다. (ONNX 백엔드 전용)
+    expose_raw_classes: bool = True
+    raw_tensor_name: str = "/model/model.105/Concat_6_output_0"
+    class_names: list[str] = field(default_factory=list)   # 비어 있으면 cls0..cls3
 
 
 @dataclass
@@ -135,6 +146,7 @@ class DashboardConfig:
     port: int = 8080
     jpeg_quality: int = 75
     stream_fps: float = 15.0
+    recordings_dir: str = "recordings"     # 최대 60초 mp4 저장 위치(볼륨 마운트 권장)
 
 
 @dataclass
@@ -168,6 +180,9 @@ class AppConfig:
                 conf_threshold=_float("CONF_THRESHOLD", 0.25),
                 iou_threshold=_float("IOU_THRESHOLD", 0.45),
                 max_det=_int("MAX_DET", 300),
+                expose_raw_classes=_bool("EXPOSE_RAW_CLASSES", True),
+                raw_tensor_name=_str("RAW_TENSOR_NAME", ModelConfig.raw_tensor_name),
+                class_names=[s.strip() for s in _str("CLASS_NAMES", "").split(",") if s.strip()],
             ),
             logic=LogicConfig(
                 window_sec=_float("WINDOW_SEC", 2.0),
@@ -197,9 +212,12 @@ class AppConfig:
                 port=_int("DASHBOARD_PORT", 8080),
                 jpeg_quality=_int("DASHBOARD_JPEG_QUALITY", 75),
                 stream_fps=_float("DASHBOARD_STREAM_FPS", 15.0),
+                recordings_dir=_str("RECORDINGS_DIR", "recordings"),
             ),
             log_level=_str("LOG_LEVEL", "INFO").upper(),
         )
+        # 대시보드에서 저장한 런타임 설정이 있으면 환경변수 위에 덮어쓴다.
+        apply_settings(cfg, load_runtime_settings())
         cfg.validate()
         return cfg
 
@@ -221,3 +239,132 @@ class AppConfig:
         rel = self.model.onnx_path if self.model.backend == "onnx" else self.model.torchscript_path
         p = Path(rel)
         return p if p.is_absolute() else (PROJECT_ROOT / p)
+
+
+# ─────────────────────────────────────────────────────────── RTSP URL 조립/분해
+
+DEFAULT_RTSP_PATH = "/profile2/media.smp"
+
+
+def parse_rtsp(url: str) -> dict:
+    """rtsp://user:pw@ip:port/path -> {ip, port, user, password, path}"""
+    if not url.startswith("rtsp://"):
+        return {"ip": url, "port": 554, "user": "", "password": "", "path": DEFAULT_RTSP_PATH}
+    s = urlsplit(url)
+    return {
+        "ip": s.hostname or "",
+        "port": s.port or 554,
+        "user": unquote(s.username or ""),
+        "password": unquote(s.password or ""),
+        "path": (s.path or DEFAULT_RTSP_PATH) + (f"?{s.query}" if s.query else ""),
+    }
+
+
+def build_rtsp(d: dict) -> str:
+    ip = str(d.get("ip", "")).strip()
+    if not ip:
+        return ""
+    user, pw = str(d.get("user", "")), str(d.get("password", ""))
+    port = int(d.get("port") or 554)
+    path = str(d.get("path") or DEFAULT_RTSP_PATH)
+    if not path.startswith("/"):
+        path = "/" + path
+    cred = f"{quote(user, safe='')}:{quote(pw, safe='')}@" if user else ""
+    host = f"{ip}:{port}" if port != 554 else ip
+    return f"rtsp://{cred}{host}{path}"
+
+
+# ────────────────────────────────────────────────── 런타임 설정(대시보드에서 수정)
+
+def runtime_settings_path() -> Path:
+    raw = os.environ.get("RUNTIME_CONFIG_PATH", "").strip()
+    return Path(raw) if raw else (PROJECT_ROOT / "runtime" / "settings.json")
+
+
+def load_runtime_settings() -> dict:
+    p = runtime_settings_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("런타임 설정 읽기 실패(%s) — 환경변수 값을 사용합니다: %s", p, exc)
+        return {}
+
+
+def save_runtime_settings(data: dict) -> None:
+    p = runtime_settings_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def settings_dict(cfg: AppConfig, reveal_password: bool = False) -> dict:
+    """현재 설정을 대시보드 표시용 구조로.
+
+    기본적으로 RTSP 비밀번호는 내보내지 않는다(대시보드는 인증이 없다).
+    빈 문자열로 저장 요청이 오면 기존 비밀번호를 유지한다.
+    """
+    cam = parse_rtsp(cfg.video.source)
+    if not reveal_password:
+        cam = {**cam, "password": "", "has_password": bool(cam["password"])}
+    return {
+        "camera": cam,
+        "plc": {"host": cfg.plc.host, "port": cfg.plc.port, "enabled": cfg.plc.enabled},
+        "judge": {
+            "conf": cfg.model.conf_threshold,
+            "iou": cfg.model.iou_threshold,
+            "count_low": cfg.logic.count_low,
+            "count_high": cfg.logic.count_high,
+            "area_low": cfg.logic.area_low,
+            "area_high": cfg.logic.area_high,
+            "cooldown": cfg.logic.cooldown_sec,
+        },
+    }
+
+
+def apply_settings(cfg: AppConfig, patch: dict) -> set[str]:
+    """patch 를 cfg 에 반영하고, 바뀐 영역 집합을 반환한다 ({'camera','plc','judge'})."""
+    changed: set[str] = set()
+    if not patch:
+        return changed
+
+    cam = dict(patch.get("camera") or {})
+    cam.pop("has_password", None)
+    if not cam.get("password"):
+        cam.pop("password", None)          # 빈 값 = "그대로 유지"
+    if cam.get("ip"):
+        url = build_rtsp({**parse_rtsp(cfg.video.source), **cam})
+        if url and url != cfg.video.source:
+            cfg.video.source = url
+            changed.add("camera")
+
+    plc = patch.get("plc") or {}
+    if plc:
+        if plc.get("host") and plc["host"] != cfg.plc.host:
+            cfg.plc.host = str(plc["host"])
+            changed.add("plc")
+        if plc.get("port") and int(plc["port"]) != cfg.plc.port:
+            cfg.plc.port = int(plc["port"])
+            changed.add("plc")
+        if "enabled" in plc and bool(plc["enabled"]) != cfg.plc.enabled:
+            cfg.plc.enabled = bool(plc["enabled"])
+            changed.add("plc")
+
+    j = patch.get("judge") or {}
+    _pairs = (
+        ("conf", cfg.model, "conf_threshold", float),
+        ("iou", cfg.model, "iou_threshold", float),
+        ("count_low", cfg.logic, "count_low", int),
+        ("count_high", cfg.logic, "count_high", int),
+        ("area_low", cfg.logic, "area_low", float),
+        ("area_high", cfg.logic, "area_high", float),
+        ("cooldown", cfg.logic, "cooldown_sec", float),
+    )
+    for key, target, attr, cast in _pairs:
+        if j.get(key) is not None and cast(j[key]) != getattr(target, attr):
+            setattr(target, attr, cast(j[key]))
+            changed.add("judge")
+
+    if changed:
+        cfg.validate()
+    return changed

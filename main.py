@@ -16,20 +16,27 @@ import argparse
 import logging
 import signal
 import sys
+import threading
 import time
 
 import numpy as np
 
-from app.config import AppConfig
+from app.config import (AppConfig, apply_settings, save_runtime_settings,
+                        settings_dict)
 from app.dashboard import serve_in_thread
 from app.detector import Detector, area_metric, resolve_roi
 from app.plc import PlcController
-from app.state import SharedState, encode_jpeg
+from app.recorder import Recorder
+from app.state import SharedState, StateLogHandler, encode_jpeg
 from app.trash_logic import (SEVERITY_LABELS, CooldownDecider, FaultTracker,
                              Severity, TrashJudge)
 from app.video import VideoSource
 
 log = logging.getLogger("main")
+det_log = logging.getLogger("detect")
+
+DETAIL_LOG_INTERVAL = 0.5      # 검출 상세 로그 최소 간격(초) — 20fps 로그 폭주 방지
+CAPTURE_WIDTH = 420            # 최근 판독 썸네일 폭
 
 # 오버레이는 cv2.putText 라 한글이 깨진다 -> 화면은 ASCII, 한글은 대시보드에서 표시.
 _ASCII_LABELS = {0: "NORMAL", 1: "PARTIAL", 2: "HEAVY", 9: "FAULT"}
@@ -110,8 +117,23 @@ def probe(cfg: AppConfig) -> int:
     return 0
 
 
+def _detail_lines(dets, detector) -> list[str]:
+    """검출 상세 — 실제 conf 와 '후처리 전에 어떤 물체로 봤는지'."""
+    lines = []
+    for i, d in enumerate(sorted(dets, key=lambda x: -x.score)[:3], start=1):
+        raw = ""
+        if d.raw_scores:
+            per = " ".join(f"{detector.class_name(k)}={v:.3f}"
+                           for k, v in enumerate(d.raw_scores))
+            raw = f" | 후처리전={d.raw_label} [{per}]"
+        lines.append(f"#{i} conf={d.score:.3f} (obj={d.obj:.3f} cls={d.cls:.3f})"
+                     f" box=({d.x1:.0f},{d.y1:.0f})-({d.x2:.0f},{d.y2:.0f}){raw}")
+    return lines
+
+
 def run(cfg: AppConfig, show: bool) -> int:
     state = SharedState()
+    logging.getLogger().addHandler(StateLogHandler(state))
     detector = Detector(cfg)
     state.update(backend=cfg.model.backend, device=detector.backend.device,
                  infer_mode=detector.infer_mode, plc_enabled=cfg.plc.enabled,
@@ -124,8 +146,26 @@ def run(cfg: AppConfig, show: bool) -> int:
     plc = PlcController(cfg)
     plc.startup()
 
+    # 대시보드에서 온 설정 변경은 여기 모아두고, 추론 루프가 안전한 시점에 반영한다
+    # (영상/PLC 객체는 추론 루프 소유 — 다른 스레드에서 만지면 안 된다).
+    pending: set[str] = set()
+    pending_lock = threading.Lock()
+
+    def on_settings(patch: dict) -> set[str]:
+        changed = apply_settings(cfg, patch)
+        if changed:
+            # 저장 파일에는 실제 비밀번호를 남긴다(마스킹은 HTTP 응답에만 적용).
+            # 마스킹된 값을 저장하면 UI 로 바꾼 비밀번호가 재시작 때 사라진다.
+            save_runtime_settings(settings_dict(cfg, reveal_password=True))
+            with pending_lock:
+                pending.update(changed)
+            log.info("설정 변경 적용: %s", ", ".join(sorted(changed)))
+        return changed
+
+    recorder = Recorder(cfg.dashboard.recordings_dir)
+
     if cfg.dashboard.enabled:
-        serve_in_thread(state, cfg)
+        serve_in_thread(state, cfg, on_settings, recorder)
 
     stopping = {"flag": False}
 
@@ -164,8 +204,37 @@ def run(cfg: AppConfig, show: bool) -> int:
             decider.reset(force_next_send=True)
         state.update(in_fault=fault.in_fault, fault_reason=fd.reason)
 
+    last_detail_at = 0.0
+
+    def apply_pending() -> None:
+        nonlocal video, last_id, frame_shape
+        with pending_lock:
+            if not pending:
+                return
+            todo = set(pending)
+            pending.clear()
+        if "judge" in todo:
+            judge.count_low = cfg.logic.count_low
+            judge.count_high = cfg.logic.count_high
+            judge.area_low = cfg.logic.area_low
+            judge.area_high = cfg.logic.area_high
+            decider.cooldown_sec = max(1.0, cfg.logic.cooldown_sec)
+            log.info("판정 기준 갱신: conf=%.2f count(%d/%d) area(%.2f/%.2f) cooldown=%.0fs",
+                     cfg.model.conf_threshold, cfg.logic.count_low, cfg.logic.count_high,
+                     cfg.logic.area_low, cfg.logic.area_high, decider.cooldown_sec)
+        if "plc" in todo:
+            plc.reconfigure(cfg)
+        if "camera" in todo:
+            log.info("영상 소스 재연결")
+            video.stop()
+            video = VideoSource(cfg.video.source, cfg.video.reconnect_sec,
+                                cfg.video.read_timeout_sec, cfg.video.ffmpeg_options).start()
+            last_id = -1
+            frame_shape = None
+
     try:
         while not stopping["flag"]:
+            apply_pending()
             frame_id, frame = video.read_latest(last_id)
             if frame is None:
                 track_health(video.connected and video.stale_sec < STALE_SEC)
@@ -194,14 +263,30 @@ def run(cfg: AppConfig, show: bool) -> int:
             count = len(dets)
             area = area_metric(dets, w, h, roi_cache, cfg.logic.area_unit)
 
+            now_m = time.monotonic()
+            if dets and now_m - last_detail_at >= DETAIL_LOG_INTERVAL:
+                last_detail_at = now_m
+                for line in _detail_lines(dets, detector):
+                    det_log.info(line)
+
             j = judge.update(count, area)
             decision = decider.decide(j)
+            capture_meta = None
             if decision.send:
                 if plc.write_result(decision.code):
                     state.update(last_sent_code=decision.code, last_sent_at=time.time())
                 log.info("판정 %s severity=%d code=%d (%s) max_cnt=%d max_area=%.3f",
                          j.category, int(j.severity), decision.code, decision.reason,
                          j.max_count, j.max_area)
+                top = max(dets, key=lambda d: d.score) if dets else None
+                capture_meta = {
+                    "code": decision.code,
+                    "label": SEVERITY_LABELS.get(Severity(int(j.severity)), "-"),
+                    "category": j.category,
+                    "det_count": count,
+                    "top_score": float(top.score) if top else 0.0,
+                    "raw_label": top.raw_label if top else "",
+                }
 
             now = time.perf_counter()
             dt = now - last_t
@@ -220,12 +305,21 @@ def run(cfg: AppConfig, show: bool) -> int:
                 decision_reason=decision.reason,
             )
 
-            if cfg.dashboard.enabled or show:
+            if recorder.active and not recorder.overlay:
+                recorder.write(frame)                # 오버레이 없이 원본 그대로
+
+            if cfg.dashboard.enabled or show or (recorder.active and recorder.overlay):
                 canvas = draw_overlay(frame, dets, state.snapshot(), roi_cache)
+                if recorder.active and recorder.overlay:
+                    recorder.write(canvas)
                 if cfg.dashboard.enabled:
                     jpeg = encode_jpeg(canvas, cfg.dashboard.jpeg_quality)
                     if jpeg:
                         state.set_jpeg(jpeg)
+                    if capture_meta is not None:
+                        thumb = encode_jpeg(canvas, 70, max_width=CAPTURE_WIDTH)
+                        if thumb:
+                            state.add_capture(thumb, **capture_meta)
                 if show:
                     import cv2
 
@@ -234,6 +328,8 @@ def run(cfg: AppConfig, show: bool) -> int:
                         stopping["flag"] = True
     finally:
         state.update(running=False)
+        if recorder.active:
+            recorder.stop("앱 종료")
         video.stop()
         plc.shutdown()
         if show:

@@ -6,6 +6,9 @@ opencv-python-headless>=4.9        # 로컬 --show 로 창을 띄우려면 openc
 # GPU:  onnxruntime-gpu  (CUDA 12.x + cuDNN 9 필요 — Docker 이미지가 제공)
 # CPU:  onnxruntime      (개발/폴백용)
 onnxruntime-gpu>=1.20 ; platform_machine == "x86_64"
+# 그래프에 ReduceMax 직전 텐서를 추가 출력으로 노출 -> '후처리 전 4클래스' 확인용.
+# 없어도 앱은 동작하며, 4클래스 표시만 생략된다.
+onnx>=1.16
 
 # 대체 백엔드 (TorchScript) — 필요할 때만 설치. 이미지가 크게 늘어난다.
 # torch>=2.6 --index-url https://download.pytorch.org/whl/cu124
