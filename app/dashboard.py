@@ -59,16 +59,13 @@ button.ctl{font-weight:600}
 .pcode{border-color:var(--c);color:var(--c);font-weight:700}
 .pcode:hover{background:var(--c);color:#0b0e12}
 main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr) minmax(210px,.62fr);
-     gap:14px;padding:14px;height:calc(100vh - 58px);align-items:stretch}
-body.test main{height:calc(100vh - 108px)}
+     gap:14px;padding:14px}
 @media (max-width:1400px){main{grid-template-columns:minmax(0,1.4fr) minmax(260px,1fr)}
   .caps{grid-column:1/-1}}
-@media (max-width:900px){main{grid-template-columns:1fr;height:auto}
-  .col{height:auto}}
-.col{display:flex;flex-direction:column;gap:14px;min-width:0;min-height:0}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
       overflow:hidden;display:flex;flex-direction:column;min-height:0}
-.card.grow{flex:1 1 auto}
 .card h2{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
          margin:0;padding:10px 13px;border-bottom:1px solid var(--line);
          display:flex;justify-content:space-between;align-items:center}
@@ -82,12 +79,11 @@ td:first-child{color:var(--muted);white-space:nowrap}
 td:last-child{text-align:right;font-variant-numeric:tabular-nums}
 tr:last-child td{border-bottom:none}
 #logbox{font:12px/1.55 Consolas,"Courier New",monospace;padding:8px 12px;overflow-y:auto;
-        flex:1 1 auto;min-height:180px}
+        max-height:340px;min-height:180px}
 #logbox div{white-space:pre-wrap;word-break:break-all;border-bottom:1px solid #1e242c;padding:2px 0}
 .lv-ERROR{color:var(--bad)} .lv-WARNING{color:var(--warn)} .lv-DET{color:var(--accent)}
 .t{color:var(--muted)}
-#capbox{overflow-y:auto;flex:1 1 auto;min-height:0}
-#recbox{overflow-y:auto;max-height:34vh}
+.caps{overflow-y:auto;max-height:calc(100vh - 120px)}
 .cap{border-bottom:1px solid var(--line);padding:8px}
 .cap img{width:100%;border-radius:6px;display:block;background:#000}
 .cap .meta{display:flex;justify-content:space-between;font-size:11px;margin-top:5px;gap:6px}
@@ -150,14 +146,14 @@ input:focus{outline:none;border-color:var(--accent)}
       <tr><td>PLC write 성공/실패</td><td id="pn">-</td></tr>
       <tr><td>백엔드</td><td id="be">-</td></tr>
     </table></section>
-    <section class="card grow"><h2>시스템 로그<span class="hint">conf · 후처리 전 라벨 포함</span></h2>
+    <section class="card"><h2>시스템 로그<span class="hint">conf · 후처리 전 라벨 포함</span></h2>
       <div id="logbox"></div></section>
   </div>
 
   <div class="col">
     <section class="card"><h2>녹화 <span class="hint" id="recstate">-</span></h2>
       <div id="recbox"><div class="empty">녹화 파일이 없습니다</div></div></section>
-    <section class="card caps grow"><h2>최근 판독 <span class="hint">최신 8장</span></h2>
+    <section class="card caps"><h2>최근 판독 <span class="hint">최신 8장</span></h2>
       <div id="capbox"><div class="empty">아직 판독 기록이 없습니다</div></div></section>
   </div>
 </main>
