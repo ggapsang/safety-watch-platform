@@ -37,7 +37,7 @@ class Recorder:
         self._size: tuple[int, int] | None = None
         self._pending_open = False
         self._fps = 15.0
-        self.overlay = True
+        self.overlay = False          # 항상 원본(박스 없음) 녹화 — main 이 raw 프레임을 넣는다
         self.last_error = ""
 
     # ------------------------------------------------------------------ 상태
@@ -64,7 +64,7 @@ class Recorder:
     # ------------------------------------------------------------------ 제어
 
     def start(self, seconds: float = MAX_SECONDS_CAP, fps: float = 15.0,
-              overlay: bool = True) -> dict:
+              overlay: bool = False) -> dict:
         with self._lock:
             if self.active:
                 raise ValueError("이미 녹화 중입니다")

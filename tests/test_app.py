@@ -340,6 +340,42 @@ class TestStateBuffers(unittest.TestCase):
         self.assertIsNone(s.capture_jpeg(1))                  # 밀려난 항목
 
 
+class TestControlState(unittest.TestCase):
+    def test_play_stop_toggle(self):
+        from app.state import SharedState
+
+        s = SharedState()
+        self.assertEqual(s.control(), (True, False))     # 기본: 판정 중
+        s.set_running(False)
+        self.assertEqual(s.control(), (False, False))
+
+    def test_test_mode_auto_stops_pipeline(self):
+        from app.state import SharedState
+
+        s = SharedState()
+        s.set_test_mode(True)
+        running, tm = s.control()
+        self.assertFalse(running)                         # ▶ 자동 정지
+        self.assertTrue(tm)
+
+    def test_manual_plc_queue_drains_once(self):
+        from app.state import SharedState
+
+        s = SharedState()
+        s.queue_plc_code(0)
+        s.queue_plc_code(2)
+        self.assertEqual(s.pop_plc_codes(), [0, 2])
+        self.assertEqual(s.pop_plc_codes(), [])           # 한 번 꺼내면 비워진다
+
+    def test_entering_test_mode_clears_pending_codes(self):
+        from app.state import SharedState
+
+        s = SharedState()
+        s.queue_plc_code(1)
+        s.set_test_mode(True)                             # 진입 시 큐 초기화
+        self.assertEqual(s.pop_plc_codes(), [])
+
+
 class TestRecorder(unittest.TestCase):
     def test_path_traversal_is_blocked(self):
         import tempfile
@@ -362,6 +398,7 @@ class TestRecorder(unittest.TestCase):
             r = Recorder(Path(d))
             st = r.start(seconds=600)
             self.assertEqual(st["limit"], MAX_SECONDS_CAP)
+            self.assertFalse(st["overlay"])                   # 항상 원본(박스 없음) 녹화
             with self.assertRaises(ValueError):
                 r.start()                                     # 중복 시작 거부
             r.stop()

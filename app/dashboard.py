@@ -26,6 +26,8 @@ import time
 
 log = logging.getLogger(__name__)
 
+VALID_CODES = {0, 1, 2, 9}     # IF 맵: 0 정회전 / 1 정지 / 2 역회전 / 9 알람
+
 _HTML = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -47,14 +49,26 @@ button{font:inherit;background:var(--panel);color:var(--fg);border:1px solid var
        border-radius:8px;padding:6px 14px;cursor:pointer}
 button:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.ctl{font-weight:600}
+#btnPlay.on{border-color:var(--ok);color:var(--ok)}
+#btnTest.on{border-color:var(--accent);color:var(--accent);background:#1b2430}
+#testbar{display:none;align-items:center;gap:10px;flex-wrap:wrap;
+         padding:10px 18px;background:#1b2028;border-bottom:1px solid var(--line)}
+#testbar.on{display:flex}
+.tlabel{font-size:12px;color:var(--muted)}
+.pcode{border-color:var(--c);color:var(--c);font-weight:700}
+.pcode:hover{background:var(--c);color:#0b0e12}
 main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr) minmax(210px,.62fr);
-     gap:14px;padding:14px}
+     gap:14px;padding:14px;height:calc(100vh - 58px);align-items:stretch}
+body.test main{height:calc(100vh - 108px)}
 @media (max-width:1400px){main{grid-template-columns:minmax(0,1.4fr) minmax(260px,1fr)}
   .caps{grid-column:1/-1}}
-@media (max-width:900px){main{grid-template-columns:1fr}}
-.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+@media (max-width:900px){main{grid-template-columns:1fr;height:auto}
+  .col{height:auto}}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0;min-height:0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
       overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.card.grow{flex:1 1 auto}
 .card h2{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
          margin:0;padding:10px 13px;border-bottom:1px solid var(--line);
          display:flex;justify-content:space-between;align-items:center}
@@ -68,11 +82,12 @@ td:first-child{color:var(--muted);white-space:nowrap}
 td:last-child{text-align:right;font-variant-numeric:tabular-nums}
 tr:last-child td{border-bottom:none}
 #logbox{font:12px/1.55 Consolas,"Courier New",monospace;padding:8px 12px;overflow-y:auto;
-        max-height:340px;min-height:180px}
+        flex:1 1 auto;min-height:180px}
 #logbox div{white-space:pre-wrap;word-break:break-all;border-bottom:1px solid #1e242c;padding:2px 0}
 .lv-ERROR{color:var(--bad)} .lv-WARNING{color:var(--warn)} .lv-DET{color:var(--accent)}
 .t{color:var(--muted)}
-.caps{overflow-y:auto;max-height:calc(100vh - 120px)}
+#capbox{overflow-y:auto;flex:1 1 auto;min-height:0}
+#recbox{overflow-y:auto;max-height:34vh}
 .cap{border-bottom:1px solid var(--line);padding:8px}
 .cap img{width:100%;border-radius:6px;display:block;background:#000}
 .cap .meta{display:flex;justify-content:space-between;font-size:11px;margin-top:5px;gap:6px}
@@ -96,6 +111,8 @@ input:focus{outline:none;border-color:var(--accent)}
 </style></head><body>
 <header>
   <h1>컨베이어 부적합(쓰레기) 탐지 — PC 추론</h1>
+  <button id="btnPlay" class="ctl">▶ 시작</button>
+  <button id="btnTest" class="ctl">PLC 테스트</button>
   <span class="chip"><span id="vdot" class="dot"></span>영상</span>
   <span class="chip"><span id="pdot" class="dot"></span>PLC</span>
   <span class="chip" id="perf">-</span>
@@ -103,6 +120,14 @@ input:focus{outline:none;border-color:var(--accent)}
   <button id="btnRec">● 녹화</button>
   <button id="btnCfg">⚙ 설정</button>
 </header>
+<div id="testbar">
+  <span class="tlabel">PLC 테스트 — 투입물과 무관하게 코드를 직접 전송합니다 (자동 판정 일시정지됨)</span>
+  <button class="pcode" data-code="0" style="--c:var(--ok)">0 정상 · 정회전</button>
+  <button class="pcode" data-code="1" style="--c:var(--warn)">1 부분오염 · 정지</button>
+  <button class="pcode" data-code="2" style="--c:var(--bad)">2 많이오염 · 역회전</button>
+  <button class="pcode" data-code="9" style="--c:var(--bad)">9 판정실패 · 알람</button>
+  <span id="testmsg" class="hint"></span>
+</div>
 
 <main>
   <div class="col">
@@ -125,14 +150,14 @@ input:focus{outline:none;border-color:var(--accent)}
       <tr><td>PLC write 성공/실패</td><td id="pn">-</td></tr>
       <tr><td>백엔드</td><td id="be">-</td></tr>
     </table></section>
-    <section class="card"><h2>시스템 로그<span class="hint">conf · 후처리 전 라벨 포함</span></h2>
+    <section class="card grow"><h2>시스템 로그<span class="hint">conf · 후처리 전 라벨 포함</span></h2>
       <div id="logbox"></div></section>
   </div>
 
   <div class="col">
     <section class="card"><h2>녹화 <span class="hint" id="recstate">-</span></h2>
       <div id="recbox"><div class="empty">녹화 파일이 없습니다</div></div></section>
-    <section class="card caps"><h2>최근 판독 <span class="hint">최신 8장</span></h2>
+    <section class="card caps grow"><h2>최근 판독 <span class="hint">최신 8장</span></h2>
       <div id="capbox"><div class="empty">아직 판독 기록이 없습니다</div></div></section>
   </div>
 </main>
@@ -203,8 +228,40 @@ async function tick(){
     $('pw').textContent=s.plc_last_error?('오류: '+s.plc_last_error):s.plc_last_write;
     $('pn').textContent=`${s.plc_write_ok} / ${s.plc_write_fail}`;
     $('be').textContent=`${s.backend} · ${s.device} · ${s.infer_mode}`;
+    // 운전 제어 반영
+    const run=s.pipeline_running, tm=s.test_mode;
+    $('btnPlay').textContent=run?'⏸ 중지':'▶ 시작';
+    $('btnPlay').classList.toggle('on',run);
+    $('btnTest').textContent=tm?'PLC 테스트 종료':'PLC 테스트';
+    $('btnTest').classList.toggle('on',tm);
+    $('testbar').classList.toggle('on',tm);
+    document.body.classList.toggle('test',tm);
   }catch(e){}
 }
+
+$('btnPlay').onclick=async()=>{
+  const run=$('btnPlay').classList.contains('on');
+  try{await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},
+                                  body:JSON.stringify({running:!run})});}catch(e){}
+  tick();
+};
+$('btnTest').onclick=async()=>{
+  const on=$('btnTest').classList.contains('on');
+  try{await fetch('/api/test',{method:'POST',headers:{'Content-Type':'application/json'},
+                               body:JSON.stringify({enabled:!on})});}catch(e){}
+  $('testmsg').textContent='';
+  tick();
+};
+document.querySelectorAll('.pcode').forEach(b=>b.onclick=async()=>{
+  const code=+b.dataset.code;
+  try{
+    const r=await fetch('/api/plc_test',{method:'POST',headers:{'Content-Type':'application/json'},
+                                         body:JSON.stringify({code})});
+    const j=await r.json();
+    $('testmsg').style.color=r.ok?'var(--ok)':'var(--bad)';
+    $('testmsg').textContent=r.ok?`코드 ${code} 전송 요청됨`:(j.detail||'실패');
+  }catch(e){$('testmsg').style.color='var(--bad)';$('testmsg').textContent='실패: '+e;}
+});
 
 let logSeq=0;
 async function pollLogs(){
@@ -257,7 +314,7 @@ $('btnRec').onclick=async()=>{
   const url=recActive?'/api/record/stop':'/api/record/start';
   try{
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-                             body:JSON.stringify({seconds:60,overlay:true})});
+                             body:JSON.stringify({seconds:60})});
     const j=await r.json();
     if(!r.ok) $('recstate').textContent='실패: '+(j.detail||'');
   }catch(e){}
@@ -384,6 +441,34 @@ def create_app(state, cfg, on_settings=None, recorder=None):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"ok": True, "changed": sorted(changed)})
 
+    @api.post("/api/control")
+    def control(body: dict) -> JSONResponse:
+        """▶/⏸ — 판정·PLC 자동 전송 on/off."""
+        state.set_running(bool(body.get("running", True)))
+        return JSONResponse({"ok": True, **_control_state()})
+
+    @api.post("/api/test")
+    def test_mode(body: dict) -> JSONResponse:
+        """PLC 테스트 모드 on/off. on 시 자동 판정(▶)이 멈춘다."""
+        state.set_test_mode(bool(body.get("enabled", False)))
+        return JSONResponse({"ok": True, **_control_state()})
+
+    @api.post("/api/plc_test")
+    def plc_test(body: dict) -> JSONResponse:
+        """테스트 모드에서 결과 코드(0/1/2/9)를 수동으로 PLC 에 전송."""
+        running, tm = state.control()
+        if not tm:
+            raise HTTPException(status_code=409, detail="PLC 테스트 모드가 아닙니다")
+        code = int(body.get("code", -1))
+        if code not in VALID_CODES:
+            raise HTTPException(status_code=400, detail=f"허용 코드: {sorted(VALID_CODES)}")
+        state.queue_plc_code(code)
+        return JSONResponse({"ok": True, "queued": code})
+
+    def _control_state() -> dict:
+        running, tm = state.control()
+        return {"running": running, "test_mode": tm}
+
     def _need_recorder():
         if recorder is None:
             raise HTTPException(status_code=503, detail="녹화 기능이 비활성 상태입니다")
@@ -395,9 +480,10 @@ def create_app(state, cfg, on_settings=None, recorder=None):
         body = body or {}
         snap = state.snapshot()
         try:
+            # 녹화는 원본(박스 없음)만 저장한다. overlay 옵션은 받지 않는다.
             st = rec.start(seconds=float(body.get("seconds", 60)),
                            fps=snap.fps or cfg.dashboard.stream_fps,
-                           overlay=bool(body.get("overlay", True)))
+                           overlay=False)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return JSONResponse(st)

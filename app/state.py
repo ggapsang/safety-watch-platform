@@ -53,6 +53,10 @@ class Snapshot:
     device: str = ""
     infer_mode: str = ""
 
+    # 운전 제어(대시보드 버튼)
+    pipeline_running: bool = True     # ▶/⏸ — 판정·PLC 자동 전송 on/off
+    test_mode: bool = False           # PLC 테스트 모드(투입물과 무관하게 코드 수동 전송)
+
 
 @dataclass
 class Capture:
@@ -79,6 +83,39 @@ class SharedState:
         self._log_seq = 0
         self._captures: deque[Capture] = deque(maxlen=MAX_CAPTURES)
         self._capture_seq = 0
+        # 대시보드 -> 추론 루프 제어. XGT 는 thread-safe 가 아니므로 수동 PLC 코드는
+        # 여기 큐에 넣고, 실제 write 는 추론 루프(단일 스레드)가 꺼내서 수행한다.
+        self._running = True
+        self._test_mode = False
+        self._plc_queue: deque[int] = deque()
+
+    # ---------------------------------------------------------------- 운전 제어
+
+    def set_running(self, value: bool) -> None:
+        with self._lock:
+            self._running = bool(value)
+
+    def set_test_mode(self, value: bool) -> None:
+        """테스트 모드 진입 시 자동 판정(▶)을 멈춰 수동 전송과 충돌하지 않게 한다."""
+        with self._lock:
+            self._test_mode = bool(value)
+            if self._test_mode:
+                self._running = False
+                self._plc_queue.clear()
+
+    def control(self) -> tuple[bool, bool]:
+        with self._lock:
+            return self._running, self._test_mode
+
+    def queue_plc_code(self, code: int) -> None:
+        with self._lock:
+            self._plc_queue.append(int(code))
+
+    def pop_plc_codes(self) -> list[int]:
+        with self._lock:
+            out = list(self._plc_queue)
+            self._plc_queue.clear()
+            return out
 
     # ------------------------------------------------------------------- 로그
 

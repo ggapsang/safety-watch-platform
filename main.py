@@ -235,13 +235,24 @@ def run(cfg: AppConfig, show: bool) -> int:
     try:
         while not stopping["flag"]:
             apply_pending()
+            running, test_mode = state.control()
+            judging = running and not test_mode      # 판정·PLC 자동 전송을 할지
+
+            # 테스트 모드: 사용자가 누른 결과 코드를 추론 루프에서 직접 write(스레드 안전)
+            for code in state.pop_plc_codes():
+                if plc.write_result(code):
+                    state.update(last_sent_code=code, last_sent_at=time.time())
+                log.info("PLC 테스트 수동 전송 code=%d", code)
+
             frame_id, frame = video.read_latest(last_id)
             if frame is None:
-                track_health(video.connected and video.stale_sec < STALE_SEC)
+                if judging:
+                    track_health(video.connected and video.stale_sec < STALE_SEC)
                 state.update(video_connected=video.connected, video_reconnects=video.reconnects,
                              plc_connected=plc.connected, plc_last_write=plc.last_write,
                              plc_last_error=plc.last_error, plc_write_ok=plc.write_ok,
-                             plc_write_fail=plc.write_fail)
+                             plc_write_fail=plc.write_fail,
+                             pipeline_running=running, test_mode=test_mode)
                 time.sleep(0.02)
                 continue
             last_id = frame_id
@@ -253,12 +264,12 @@ def run(cfg: AppConfig, show: bool) -> int:
                 log.info("프레임 %dx%d, ROI 꼭짓점 %d개", w, h, len(roi_cache))
 
             try:
-                dets = detector.detect(frame)
+                dets = detector.detect(frame)      # 표시용으로 항상 추론(박스 라이브뷰 유지)
             except Exception:
                 log.exception("추론 실패")
-                track_health(False)
+                if judging:
+                    track_health(False)
                 continue
-            track_health(True)
 
             count = len(dets)
             area = area_metric(dets, w, h, roi_cache, cfg.logic.area_unit)
@@ -270,23 +281,29 @@ def run(cfg: AppConfig, show: bool) -> int:
                     det_log.info(line)
 
             j = judge.update(count, area)
-            decision = decider.decide(j)
             capture_meta = None
-            if decision.send:
-                if plc.write_result(decision.code):
-                    state.update(last_sent_code=decision.code, last_sent_at=time.time())
-                log.info("판정 %s severity=%d code=%d (%s) max_cnt=%d max_area=%.3f",
-                         j.category, int(j.severity), decision.code, decision.reason,
-                         j.max_count, j.max_area)
-                top = max(dets, key=lambda d: d.score) if dets else None
-                capture_meta = {
-                    "code": decision.code,
-                    "label": SEVERITY_LABELS.get(Severity(int(j.severity)), "-"),
-                    "category": j.category,
-                    "det_count": count,
-                    "top_score": float(top.score) if top else 0.0,
-                    "raw_label": top.raw_label if top else "",
-                }
+            if judging:
+                track_health(True)
+                decision = decider.decide(j)
+                if decision.send:
+                    if plc.write_result(decision.code):
+                        state.update(last_sent_code=decision.code, last_sent_at=time.time())
+                    log.info("판정 %s severity=%d code=%d (%s) max_cnt=%d max_area=%.3f",
+                             j.category, int(j.severity), decision.code, decision.reason,
+                             j.max_count, j.max_area)
+                    top = max(dets, key=lambda d: d.score) if dets else None
+                    capture_meta = {
+                        "code": decision.code,
+                        "label": SEVERITY_LABELS.get(Severity(int(j.severity)), "-"),
+                        "category": j.category,
+                        "det_count": count,
+                        "top_score": float(top.score) if top else 0.0,
+                        "raw_label": top.raw_label if top else "",
+                    }
+                reason = decision.reason
+            else:
+                reason = ("PLC 테스트 모드 — 자동 판정 정지 (코드 버튼으로 수동 전송)"
+                          if test_mode else "중지됨 — ▶ 시작을 누르면 판정을 재개합니다")
 
             now = time.perf_counter()
             dt = now - last_t
@@ -302,16 +319,15 @@ def run(cfg: AppConfig, show: bool) -> int:
                 fps=fps, infer_ms=detector.last_infer_ms, det_count=count, area_value=area,
                 max_count=j.max_count, max_area=j.max_area, category=j.category,
                 severity=int(j.severity), severity_label=SEVERITY_LABELS[Severity(int(j.severity))],
-                decision_reason=decision.reason,
+                decision_reason=reason, pipeline_running=running, test_mode=test_mode,
             )
 
-            if recorder.active and not recorder.overlay:
-                recorder.write(frame)                # 오버레이 없이 원본 그대로
+            # 녹화는 항상 원본 프레임(박스·오버레이 없음)으로 저장한다.
+            if recorder.active:
+                recorder.write(frame)
 
-            if cfg.dashboard.enabled or show or (recorder.active and recorder.overlay):
+            if cfg.dashboard.enabled or show:
                 canvas = draw_overlay(frame, dets, state.snapshot(), roi_cache)
-                if recorder.active and recorder.overlay:
-                    recorder.write(canvas)
                 if cfg.dashboard.enabled:
                     jpeg = encode_jpeg(canvas, cfg.dashboard.jpeg_quality)
                     if jpeg:
