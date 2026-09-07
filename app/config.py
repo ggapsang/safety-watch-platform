@@ -118,6 +118,9 @@ class LogicConfig:
     area_high: float = 3.0
     area_unit: str = "percent"            # percent | ratio
     cooldown_sec: float = 8.0             # 최소 1초
+    # 부분오염(1) 확정 전 대기 창(초). 이 안에 많이오염(2)이 한 번이라도 관측되면 2 로 격상해
+    # 보낸다. 움직이는 물체가 프레임에 덜 들어온 채 1 로 조기 확정되는 것을 막는다. 0=즉시 발송.
+    escalate_sec: float = 0.5
     # IF 맵상 0 은 '정회전'이라는 능동 명령이다. 정상 복귀 시 0 을 써야 라인이 되살아난다.
     write_zero_on_normal: bool = True
     roi_polygon: list[tuple[float, float]] = field(default_factory=list)
@@ -135,8 +138,11 @@ class PlcConfig:
     port: int = 2004                      # XGT 전용 프로토콜
     cpu_info: int = 0x00                  # XGB 계열은 CPU_ANY 권장
     timeout_sec: float = 2.0
-    addr_pc_ready: str = "%DW8100"        # PC Ready       0=Off / 1=On
-    addr_result: str = "%DW8101"          # 판정 결과 코드  0/1/2/9
+    addr_pc_ready: str = "%DW8100"        # PC Ready       0=Off / 1=On   (Write)
+    addr_result: str = "%DW8101"          # 판정 결과 코드  0/1/2/9        (Write)
+    addr_conveyor_run: str = "%DW8001"    # Conveyor RUN   0=Off / 1=On   (Read)
+    conveyor_poll_sec: float = 0.5        # D8001 게이트 폴링 주기(초). 작을수록 응답↑·부하↑
+    result_pulse_sec: float = 0.5         # 결과 코드(1/2) 전송 후 0 으로 복귀하는 펄스 폭(초). 0=유지
 
 
 @dataclass
@@ -192,6 +198,7 @@ class AppConfig:
                 area_high=_float("AREA_HIGH", 3.0),
                 area_unit=_str("AREA_UNIT", "percent").lower(),
                 cooldown_sec=_float("COOLDOWN_SEC", 8.0),
+                escalate_sec=_float("ESCALATE_SEC", 0.5),
                 write_zero_on_normal=_bool("WRITE_ZERO_ON_NORMAL", True),
                 roi_polygon=_polygon("ROI_POLYGON"),
                 fault_code=_int("FAULT_CODE", 9),
@@ -205,6 +212,9 @@ class AppConfig:
                 timeout_sec=_float("PLC_TIMEOUT_SEC", 2.0),
                 addr_pc_ready=_str("PLC_ADDR_PC_READY", "%DW8100"),
                 addr_result=_str("PLC_ADDR_RESULT", "%DW8101"),
+                addr_conveyor_run=_str("PLC_ADDR_CONVEYOR_RUN", "%DW8001"),
+                conveyor_poll_sec=_float("PLC_CONVEYOR_POLL_SEC", 0.5),
+                result_pulse_sec=_float("PLC_RESULT_PULSE_SEC", 0.5),
             ),
             dashboard=DashboardConfig(
                 enabled=_bool("DASHBOARD_ENABLED", True),
@@ -234,11 +244,47 @@ class AppConfig:
             raise ValueError("AREA_LOW 는 AREA_HIGH 이하여야 합니다")
         # 설계 문서: cooldown 최소 1초
         self.logic.cooldown_sec = max(1.0, self.logic.cooldown_sec)
+        self.logic.escalate_sec = max(0.0, self.logic.escalate_sec)
 
     def model_path(self) -> Path:
         rel = self.model.onnx_path if self.model.backend == "onnx" else self.model.torchscript_path
         p = Path(rel)
         return p if p.is_absolute() else (PROJECT_ROOT / p)
+
+
+# ───────────────────────────────────────────── 모델 파일 선택(대시보드에서 교체)
+
+def _abs_path(rel: str | os.PathLike) -> Path:
+    p = Path(rel)
+    return p if p.is_absolute() else (PROJECT_ROOT / p)
+
+
+def model_root(cfg: AppConfig) -> Path:
+    """모델 파일들이 모여 있는 폴더(=현재 onnx 파일의 상위 폴더). 볼륨 마운트 지점."""
+    return _abs_path(cfg.model.onnx_path).parent
+
+
+def available_model_files(cfg: AppConfig) -> dict[str, Path]:
+    """model_root 아래의 *.onnx 를 {상대이름: 절대경로} 로 (history 등 하위 폴더 포함).
+    torch 미설치 이미지에서 .pt(TorchScript)는 로드 불가하므로 목록에서 제외한다."""
+    root = model_root(cfg)
+    out: dict[str, Path] = {}
+    if not root.exists():
+        return out
+    for p in sorted(root.rglob("*.onnx")):
+        if p.is_file():
+            out[p.relative_to(root).as_posix()] = p
+    return out
+
+
+def current_model_file(cfg: AppConfig) -> str:
+    """현재 활성 onnx 의 model_root 기준 상대이름."""
+    p = _abs_path(cfg.model.onnx_path)
+    root = model_root(cfg)
+    try:
+        return p.relative_to(root).as_posix()
+    except ValueError:
+        return p.name
 
 
 # ─────────────────────────────────────────────────────────── RTSP URL 조립/분해
@@ -307,9 +353,15 @@ def settings_dict(cfg: AppConfig, reveal_password: bool = False) -> dict:
     cam = parse_rtsp(cfg.video.source)
     if not reveal_password:
         cam = {**cam, "password": "", "has_password": bool(cam["password"])}
+    avail = available_model_files(cfg)
     return {
         "camera": cam,
         "plc": {"host": cfg.plc.host, "port": cfg.plc.port, "enabled": cfg.plc.enabled},
+        "model": {
+            "current": current_model_file(cfg),
+            "available": [{"name": n, "size_mb": round(p.stat().st_size / 1048576, 1)}
+                          for n, p in avail.items()],
+        },
         "judge": {
             "conf": cfg.model.conf_threshold,
             "iou": cfg.model.iou_threshold,
@@ -318,6 +370,7 @@ def settings_dict(cfg: AppConfig, reveal_password: bool = False) -> dict:
             "area_low": cfg.logic.area_low,
             "area_high": cfg.logic.area_high,
             "cooldown": cfg.logic.cooldown_sec,
+            "escalate": cfg.logic.escalate_sec,
         },
     }
 
@@ -337,6 +390,21 @@ def apply_settings(cfg: AppConfig, patch: dict) -> set[str]:
         if url and url != cfg.video.source:
             cfg.video.source = url
             changed.add("camera")
+
+    # 모델 선택 — 저장본은 model.current, 대시보드는 model.file 로 보낸다. 스캔 목록 안의
+    # 파일만 허용(경로 탈출 차단). 없는 파일이면 조용히 무시해 env/기본값으로 폴백한다.
+    m = patch.get("model") or {}
+    sel = m.get("file") or m.get("current")
+    if sel:
+        avail = available_model_files(cfg)
+        if sel in avail:
+            new_abs = avail[sel]
+            if new_abs.resolve() != _abs_path(cfg.model.onnx_path).resolve():
+                cfg.model.onnx_path = str(new_abs)
+                cfg.model.backend = "onnx"          # 선택 목록은 onnx 전용
+                changed.add("model")
+        else:
+            log.warning("모델 선택 무시 — 목록에 없는 파일: %s", sel)
 
     plc = patch.get("plc") or {}
     if plc:
@@ -359,6 +427,7 @@ def apply_settings(cfg: AppConfig, patch: dict) -> set[str]:
         ("area_low", cfg.logic, "area_low", float),
         ("area_high", cfg.logic, "area_high", float),
         ("cooldown", cfg.logic, "cooldown_sec", float),
+        ("escalate", cfg.logic, "escalate_sec", float),
     )
     for key, target, attr, cast in _pairs:
         if j.get(key) is not None and cast(j[key]) != getattr(target, attr):

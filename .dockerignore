@@ -1,10 +1,9 @@
-# 모델(292MB)·영상은 볼륨으로 주입한다 — 빌드 컨텍스트에 넣지 않는다
-model_files/
+# 단일 이미지 배포: 모델·설정을 이미지에 굽는다(그래서 아래 제외 목록에서 뺐다).
+#   - model_files/  : 모델(.onnx/.pt) 을 이미지에 포함
+#   - .env, runtime/: 현재 설정을 그대로 포함(현장 배포용)
+# 아래는 빌드 컨텍스트에 넣지 않는다.
 samples/
-runtime/
 recordings/
-
-.env
 .git/
 .venv/
 venv/

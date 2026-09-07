@@ -6,9 +6,9 @@ __pycache__/
 .venv/
 venv/
 
-# 모델 바이너리(수백 MB) — 볼륨 마운트로 주입
-model_files/*.onnx
-model_files/*.pt
+# 모델 바이너리(수백 MB) — 하위 폴더(history 등) 포함해서 전부 제외
+model_files/**/*.onnx
+model_files/**/*.pt
 
 # 24MB 사내 디자인 가이드 — 이 앱과 무관
 문서/*.pdf
@@ -19,3 +19,13 @@ model_files/*.pt
 # 대시보드에서 저장한 런타임 설정 — 카메라/PLC IP 등 현장 값 포함
 runtime/
 recordings/
+
+# 배포용 Docker 이미지 export (수 GB) — 커밋 금지
+*.tar
+
+# 모델 학습용 원본 영상(대용량) — 이 앱과 무관
+*.zip
+모델학습용 영상/
+
+# 설치·사용 가이드 PDF — 원본은 app/help_page.py 의 도움말 페이지, 배포 시 별도 전달
+*.pdf

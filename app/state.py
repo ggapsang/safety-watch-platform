@@ -31,6 +31,7 @@ class Snapshot:
     plc_last_error: str = ""
     plc_write_ok: int = 0
     plc_write_fail: int = 0
+    conveyor_run: bool = False        # D8001 RUN 게이트(마지막으로 읽힌 값). RUN 일 때만 판정·전송
     in_fault: bool = False
     fault_reason: str = ""
 
@@ -52,6 +53,7 @@ class Snapshot:
     backend: str = ""
     device: str = ""
     infer_mode: str = ""
+    model_file: str = ""              # 현재 활성 모델 파일(대시보드에서 교체 가능)
 
     # 운전 제어(대시보드 버튼)
     pipeline_running: bool = True     # ▶/⏸ — 판정·PLC 자동 전송 on/off
@@ -88,6 +90,11 @@ class SharedState:
         self._running = True
         self._test_mode = False
         self._plc_queue: deque[int] = deque()
+        # 'Conveyor RUN 상태 확인' 버튼: 대시보드가 요청(req) → 추론 루프가 읽어서 응답(ack).
+        # XGT 는 thread-safe 가 아니라 대시보드가 직접 못 읽으므로 루프에 위임한다.
+        self._conveyor_req = 0
+        self._conveyor_ack = 0
+        self._conveyor_result: dict | None = None
 
     # ---------------------------------------------------------------- 운전 제어
 
@@ -116,6 +123,32 @@ class SharedState:
             out = list(self._plc_queue)
             self._plc_queue.clear()
             return out
+
+    # ------------------------------------------------ Conveyor RUN 확인(요청/응답)
+
+    def request_conveyor_read(self) -> int:
+        """대시보드에서 D8001 즉시 읽기를 요청. 요청 seq 를 반환한다."""
+        with self._lock:
+            self._conveyor_req += 1
+            return self._conveyor_req
+
+    def take_conveyor_request(self) -> int | None:
+        """미처리 요청 seq(없으면 None). 추론 루프가 매 반복 확인한다."""
+        with self._lock:
+            return self._conveyor_req if self._conveyor_req != self._conveyor_ack else None
+
+    def set_conveyor_result(self, seq: int, result: dict) -> None:
+        """추론 루프가 읽은 결과를 기록하고 요청을 완료 처리한다."""
+        with self._lock:
+            self._conveyor_ack = seq
+            self._conveyor_result = result
+
+    def get_conveyor_result(self, seq: int) -> dict | None:
+        """요청 seq 가 처리됐으면 결과를 반환(아직이면 None). 대시보드가 폴링한다."""
+        with self._lock:
+            if self._conveyor_ack >= seq and self._conveyor_result is not None:
+                return self._conveyor_result
+            return None
 
     # ------------------------------------------------------------------- 로그
 

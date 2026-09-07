@@ -20,9 +20,19 @@ COPY app/ ./app/
 COPY main.py ./
 COPY tests/ ./tests/
 
-# 모델은 이미지에 굽지 않고 볼륨으로 주입한다 (./model_files -> /app/model_files)
+# 단일 이미지 배포: 모델·현재 설정을 이미지에 굽는다(외부 폴더/.env/볼륨 없이 실행).
+COPY model_files/ ./model_files/
+COPY .env ./.env
+COPY runtime/ ./runtime/
+RUN mkdir -p /app/recordings
+
+# MODEL_DEVICE=cpu 를 기본값으로 — GPU 없이(Docker Desktop GUI 실행) 곧장 CPU 추론.
+#   (GPU 로 돌릴 때는 실행 시 -e MODEL_DEVICE=cuda 로 덮어쓴다. dev 는 compose 가 cuda 로 덮음.)
 ENV MODEL_ONNX_PATH=/app/model_files/best_trash.torchscript.onnx \
     MODEL_TORCHSCRIPT_PATH=/app/model_files/best_trash.torchscript.pt \
+    MODEL_DEVICE=cpu \
+    RUNTIME_CONFIG_PATH=/app/runtime/settings.json \
+    RECORDINGS_DIR=/app/recordings \
     DASHBOARD_HOST=0.0.0.0 \
     DASHBOARD_PORT=8080
 

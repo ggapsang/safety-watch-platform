@@ -151,51 +151,77 @@ class Decision:
 
 
 class CooldownDecider:
-    """발송 여부 판단.
+    """발송 여부 판단(엄격 쿨다운 + 부분오염 격상 창).
 
-      - L_L(정상) -> 항상 skip + prev 초기화
-        (write_zero_on_normal=True 면 '정상 복귀 시 1회만' 0 write)
-      - 9매트릭스 카테고리 변경 -> cooldown 우회 (위협 수준 변화는 즉시 반영)
-      - cooldown 중 + 동일 카테고리 -> skip
+      - L_L(정상) -> 항상 skip + 쿨다운/대기 초기화
+        (write_zero_on_normal=True 면 '정상 복귀 시 1회만' 0 write — 라인 되살리는 0 은 즉시)
+      - 많이오염(2): 쿨다운만 통과하면 즉시 발송한다.
+      - 부분오염(1): 바로 보내지 않고 escalate_sec(기본 0.5초) 동안 '확인 창'을 연다.
+        창이 열려 있는 동안 관측한 최대 severity 를 창 종료 시점에 발송한다 —
+        즉 창 안에서 한 번이라도 많이오염(2)이 나오면 2 로 격상해 보낸다.
+        (움직이는 물체가 프레임에 덜 들어온 채 1 로 조기 확정되는 것을 방지)
+      - 발송 후에는 cooldown 이 지나야 다음을 보낸다. cooldown 중에는 더 높은
+        severity 가 와도 흡수한다(엄격 쿨다운).
     """
 
-    def __init__(self, cooldown_sec: float = 8.0, write_zero_on_normal: bool = False) -> None:
+    def __init__(self, cooldown_sec: float = 8.0, write_zero_on_normal: bool = False,
+                 escalate_sec: float = 0.5) -> None:
         self.cooldown_sec = max(1.0, cooldown_sec)
         self.write_zero_on_normal = write_zero_on_normal
-        self._prev_category: str | None = None
+        self.escalate_sec = max(0.0, escalate_sec)      # 0 이면 격상 창 없이 즉시 발송
         self._last_sent_at: float | None = None
         self._zero_written = True     # 기동 직후 정상 상태에서 불필요한 0 write 방지
+        self._pending_since: float | None = None        # 부분오염 확인 창 시작 시각
+        self._pending_max = 0                           # 창 동안 관측한 최대 severity
 
     def decide(self, j: Judgement, now: float | None = None) -> Decision:
         now = time.monotonic() if now is None else now
+        sev = int(j.severity)
 
         if j.severity == Severity.NORMAL:
-            self._prev_category = None
             self._last_sent_at = None
+            self._pending_since = None
+            self._pending_max = 0
             if self.write_zero_on_normal and not self._zero_written:
                 self._zero_written = True
                 return Decision(True, 0, "정상 복귀 — 0 write")
             return Decision(False, 0, "L_L 정상 — skip")
 
         self._zero_written = False
-        changed = j.category != self._prev_category
+
+        # 부분오염 확인 창 진행 중 — 최대 severity 를 추적하다가 창이 끝나면 확정 발송
+        if self._pending_since is not None:
+            self._pending_max = max(self._pending_max, sev)
+            if now - self._pending_since >= self.escalate_sec:
+                code = self._pending_max
+                self._pending_since = None
+                self._pending_max = 0
+                self._last_sent_at = now
+                label = SEVERITY_LABELS.get(Severity(code), str(code))
+                return Decision(True, code, f"확인 창 종료 — {label}({code}) 발송")
+            remain = self.escalate_sec - (now - self._pending_since)
+            return Decision(False, sev, f"부분오염 확인 대기 {remain:.1f}s (많이오염이면 격상)")
+
         cooled = self._last_sent_at is None or (now - self._last_sent_at) >= self.cooldown_sec
+        if not cooled:
+            remain = self.cooldown_sec - (now - self._last_sent_at)
+            return Decision(False, sev, f"cooldown {remain:.1f}s 남음 — skip")
 
-        if changed or cooled:
-            reason = "카테고리 변경 — cooldown 우회" if changed and not cooled else "발송"
-            self._prev_category = j.category
+        # 쿨다운 통과 — 많이오염은 즉시, 부분오염은 확인 창을 연다
+        if sev >= int(Severity.HEAVY) or self.escalate_sec <= 0:
             self._last_sent_at = now
-            return Decision(True, int(j.severity), reason)
-
-        remain = self.cooldown_sec - (now - self._last_sent_at)
-        return Decision(False, int(j.severity), f"cooldown {remain:.1f}s 남음 — skip")
+            return Decision(True, sev, "발송")
+        self._pending_since = now
+        self._pending_max = sev
+        return Decision(False, sev, f"부분오염 감지 — {self.escalate_sec:.1f}s 확인 대기 시작")
 
     def reset(self, force_next_send: bool = False) -> None:
         """상태 초기화. force_next_send=True 면 다음 판정을 무조건 1회 발송한다
-        (판정실패 9 를 보낸 뒤 복구 시, 라인을 되살릴 코드를 다시 써야 하므로)."""
-        self._prev_category = None
+        (판정실패 복구 시 라인을 되살릴 코드를 다시 써야 하므로)."""
         self._last_sent_at = None
         self._zero_written = not force_next_send
+        self._pending_since = None
+        self._pending_max = 0
 
 
 class FaultTracker:

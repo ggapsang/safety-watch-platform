@@ -21,11 +21,11 @@ import time
 
 import numpy as np
 
-from app.config import (AppConfig, apply_settings, save_runtime_settings,
-                        settings_dict)
+from app.config import (AppConfig, apply_settings, current_model_file,
+                        save_runtime_settings, settings_dict)
 from app.dashboard import serve_in_thread
 from app.detector import Detector, area_metric, resolve_roi
-from app.plc import PlcController
+from app.plc import CONVEYOR_RUN_ON, PULSE_CODES, PlcController
 from app.recorder import Recorder
 from app.state import SharedState, StateLogHandler, encode_jpeg
 from app.trash_logic import (SEVERITY_LABELS, CooldownDecider, FaultTracker,
@@ -135,13 +135,16 @@ def run(cfg: AppConfig, show: bool) -> int:
     state = SharedState()
     logging.getLogger().addHandler(StateLogHandler(state))
     detector = Detector(cfg)
+    loaded_model_path = cfg.model.onnx_path        # 마지막으로 성공적으로 로드된 모델 경로
     state.update(backend=cfg.model.backend, device=detector.backend.device,
                  infer_mode=detector.infer_mode, plc_enabled=cfg.plc.enabled,
-                 area_unit=cfg.logic.area_unit, running=True)
+                 area_unit=cfg.logic.area_unit, model_file=current_model_file(cfg),
+                 running=True)
 
     judge = TrashJudge(cfg.logic.window_sec, cfg.logic.count_low, cfg.logic.count_high,
                        cfg.logic.area_low, cfg.logic.area_high)
-    decider = CooldownDecider(cfg.logic.cooldown_sec, cfg.logic.write_zero_on_normal)
+    decider = CooldownDecider(cfg.logic.cooldown_sec, cfg.logic.write_zero_on_normal,
+                              cfg.logic.escalate_sec)
     fault = FaultTracker(cfg.logic.fault_after_sec, cfg.logic.fault_code)
     plc = PlcController(cfg)
     plc.startup()
@@ -191,13 +194,25 @@ def run(cfg: AppConfig, show: bool) -> int:
     # FAULT_AFTER_SEC 이상 지속되면 FaultTracker 가 코드 9 를 1회 전송한다.
     STALE_SEC = 2.0
 
+    def send_result(code: int) -> bool:
+        """D8101 에 결과 코드를 쓰고, 펄스 대상(1/2)이면 0.5초 뒤 0 복귀를 예약한다.
+        판정·판정실패(9)·테스트 수동 전송이 모두 이 경로를 쓴다."""
+        ok = plc.write_result(code)
+        if ok:
+            state.update(last_sent_code=code, last_sent_at=time.time())
+            if code in PULSE_CODES:
+                plc.arm_result_reset()          # 1·2 → 펄스(0.5초 뒤 0)
+            else:
+                plc.cancel_result_reset()        # 0·9 → 예약 취소(이미 0 이거나 알람 래치 유지)
+        return ok
+
     def track_health(healthy: bool) -> None:
-        """판정실패(코드 9) 진입/복구 처리."""
+        """판정실패(코드 9) 진입/복구 처리.
+        코드 9 는 PLC 로 자동 전송하지 않는다 — 대시보드 표시·로그만.
+        (테스트 모드 버튼으로 수동 전송하는 경로는 그대로 유지.)"""
         fd = fault.update(healthy)
         if fd.send:
-            log.error("판정실패 — %s", fd.reason)
-            if plc.write_result(fd.code):
-                state.update(last_sent_code=fd.code, last_sent_at=time.time())
+            log.error("판정실패 — %s (PLC 전송 안 함)", fd.reason)
         elif fd.reason == "판정실패 복구":
             log.info("판정실패 복구 — 판정 재개(다음 판정을 즉시 전송)")
             judge.window.clear()
@@ -207,21 +222,42 @@ def run(cfg: AppConfig, show: bool) -> int:
     last_detail_at = 0.0
 
     def apply_pending() -> None:
-        nonlocal video, last_id, frame_shape
+        nonlocal video, last_id, frame_shape, detector, loaded_model_path
         with pending_lock:
             if not pending:
                 return
             todo = set(pending)
             pending.clear()
+        if "model" in todo:
+            from pathlib import Path as _P
+            log.info("모델 교체 시도: %s → 로딩 중… (수 초간 판정 일시정지)",
+                     _P(cfg.model.onnx_path).name)
+            try:
+                new_detector = Detector(cfg)                  # 성공해야만 교체(temp→swap)
+            except Exception:
+                log.exception("모델 로드 실패 — 이전 모델 유지: %s", _P(loaded_model_path).name)
+                cfg.model.onnx_path = loaded_model_path       # 되돌리고 저장본도 정정
+                save_runtime_settings(settings_dict(cfg, reveal_password=True))
+            else:
+                detector = new_detector
+                loaded_model_path = cfg.model.onnx_path
+                judge.window.clear()                          # 이전 모델 검출 잔상 제거
+                decider.reset()
+                state.update(backend=cfg.model.backend, device=detector.backend.device,
+                             infer_mode=detector.infer_mode, model_file=current_model_file(cfg))
+                log.info("모델 교체 완료: %s (device=%s, infer_mode=%s)",
+                         current_model_file(cfg), detector.backend.device, detector.infer_mode)
         if "judge" in todo:
             judge.count_low = cfg.logic.count_low
             judge.count_high = cfg.logic.count_high
             judge.area_low = cfg.logic.area_low
             judge.area_high = cfg.logic.area_high
             decider.cooldown_sec = max(1.0, cfg.logic.cooldown_sec)
-            log.info("판정 기준 갱신: conf=%.2f count(%d/%d) area(%.2f/%.2f) cooldown=%.0fs",
+            decider.escalate_sec = max(0.0, cfg.logic.escalate_sec)
+            log.info("판정 기준 갱신: conf=%.2f count(%d/%d) area(%.2f/%.2f) cooldown=%.0fs escalate=%.1fs",
                      cfg.model.conf_threshold, cfg.logic.count_low, cfg.logic.count_high,
-                     cfg.logic.area_low, cfg.logic.area_high, decider.cooldown_sec)
+                     cfg.logic.area_low, cfg.logic.area_high, decider.cooldown_sec,
+                     decider.escalate_sec)
         if "plc" in todo:
             plc.reconfigure(cfg)
         if "camera" in todo:
@@ -232,16 +268,62 @@ def run(cfg: AppConfig, show: bool) -> int:
             last_id = -1
             frame_shape = None
 
+    # ── 컨베이어 RUN(D8001) 게이트 ────────────────────────────────────
+    # RUN(1) 일 때만 판정·PLC 전송을 수행하고, 정지면 판정 결과를 쿨다운과 무관하게 버린다.
+    # PLC 미연결/읽기 실패는 '정지(미확인)'로 간주(fail-safe). PLC 비활성이면 게이트 해제.
+    conveyor_run = False           # 최초엔 미확인 → 정지로 간주
+    last_conveyor_poll = 0.0       # monotonic
+    conveyor_poll_sec = max(0.05, cfg.plc.conveyor_poll_sec)   # 폭주 방지 하한 0.05s
+
+    def serve_conveyor_check() -> None:
+        """대시보드 'Conveyor RUN 상태 확인' 버튼 요청을 즉시 1회 읽어 응답한다."""
+        req = state.take_conveyor_request()
+        if req is None:
+            return
+        val = plc.read_conveyor_run()
+        if not plc.enabled:
+            res = {"ok": False, "raw": None, "run": None, "detail": "PLC 비활성(PLC_ENABLED=false)"}
+        elif val is None:
+            res = {"ok": False, "raw": None, "run": None,
+                   "detail": "읽기 실패: " + (plc.last_read_error or "연결 없음")}
+        else:
+            run = val == CONVEYOR_RUN_ON
+            res = {"ok": True, "raw": val, "run": run,
+                   "detail": f"D8001 = {val} → {'RUN(가동)' if run else '정지(Off)'}"}
+        state.set_conveyor_result(req, res)
+
+    def poll_conveyor_gate(now_m: float, active: bool) -> bool:
+        """게이팅용 D8001 주기 폴링. PLC 비활성이면 게이트 해제(True).
+        읽기 실패 시에는 직전 값을 유지해 순간 오류로 인한 플리커를 막는다."""
+        nonlocal conveyor_run, last_conveyor_poll
+        if not plc.enabled:
+            return True
+        if active and now_m - last_conveyor_poll >= conveyor_poll_sec:
+            last_conveyor_poll = now_m
+            val = plc.read_conveyor_run()
+            if val is not None:
+                new_run = val == CONVEYOR_RUN_ON
+                if new_run != conveyor_run:
+                    log.info("컨베이어 RUN 상태: %s (D8001=%d)",
+                             "RUN(가동)" if new_run else "정지", val)
+                conveyor_run = new_run
+        return conveyor_run
+
     try:
         while not stopping["flag"]:
             apply_pending()
+            loop_now = time.monotonic()
+            serve_conveyor_check()                   # 대시보드 read 요청 처리(모드 무관)
+            plc.service_result_reset(loop_now)       # 예약된 1/2 펄스를 0.5초 뒤 0 으로 종료
             running, test_mode = state.control()
-            judging = running and not test_mode      # 판정·PLC 자동 전송을 할지
+            active = running and not test_mode
+            gate_run = poll_conveyor_gate(loop_now, active)
+            judging = active and gate_run            # 판정·PLC 자동 전송을 할지
 
             # 테스트 모드: 사용자가 누른 결과 코드를 추론 루프에서 직접 write(스레드 안전)
+            # 자동 경로와 동일하게 1·2 는 펄스(0.5초 뒤 0)로 나간다.
             for code in state.pop_plc_codes():
-                if plc.write_result(code):
-                    state.update(last_sent_code=code, last_sent_at=time.time())
+                send_result(code)
                 log.info("PLC 테스트 수동 전송 code=%d", code)
 
             frame_id, frame = video.read_latest(last_id)
@@ -251,7 +333,7 @@ def run(cfg: AppConfig, show: bool) -> int:
                 state.update(video_connected=video.connected, video_reconnects=video.reconnects,
                              plc_connected=plc.connected, plc_last_write=plc.last_write,
                              plc_last_error=plc.last_error, plc_write_ok=plc.write_ok,
-                             plc_write_fail=plc.write_fail,
+                             plc_write_fail=plc.write_fail, conveyor_run=gate_run,
                              pipeline_running=running, test_mode=test_mode)
                 time.sleep(0.02)
                 continue
@@ -286,8 +368,7 @@ def run(cfg: AppConfig, show: bool) -> int:
                 track_health(True)
                 decision = decider.decide(j)
                 if decision.send:
-                    if plc.write_result(decision.code):
-                        state.update(last_sent_code=decision.code, last_sent_at=time.time())
+                    send_result(decision.code)
                     log.info("판정 %s severity=%d code=%d (%s) max_cnt=%d max_area=%.3f",
                              j.category, int(j.severity), decision.code, decision.reason,
                              j.max_count, j.max_area)
@@ -301,9 +382,12 @@ def run(cfg: AppConfig, show: bool) -> int:
                         "raw_label": top.raw_label if top else "",
                     }
                 reason = decision.reason
-            else:
-                reason = ("PLC 테스트 모드 — 자동 판정 정지 (코드 버튼으로 수동 전송)"
-                          if test_mode else "중지됨 — ▶ 시작을 누르면 판정을 재개합니다")
+            elif test_mode:
+                reason = "PLC 테스트 모드 — 자동 판정 정지 (코드 버튼으로 수동 전송)"
+            elif not running:
+                reason = "중지됨 — ▶ 시작을 누르면 판정을 재개합니다"
+            else:   # running & not test_mode 인데 컨베이어 정지 → 결과 폐기
+                reason = "컨베이어 정지(D8001=Off) — 판정 결과를 버립니다(전송 안 함)"
 
             now = time.perf_counter()
             dt = now - last_t
@@ -315,7 +399,7 @@ def run(cfg: AppConfig, show: bool) -> int:
                 video_connected=video.connected, video_reconnects=video.reconnects,
                 plc_connected=plc.connected, plc_last_write=plc.last_write,
                 plc_last_error=plc.last_error, plc_write_ok=plc.write_ok,
-                plc_write_fail=plc.write_fail,
+                plc_write_fail=plc.write_fail, conveyor_run=gate_run,
                 fps=fps, infer_ms=detector.last_infer_ms, det_count=count, area_value=area,
                 max_count=j.max_count, max_area=j.max_area, category=j.category,
                 severity=int(j.severity), severity_label=SEVERITY_LABELS[Severity(int(j.severity))],

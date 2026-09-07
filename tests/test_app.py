@@ -114,12 +114,49 @@ class TestCooldown(unittest.TestCase):
         self.assertTrue(r.send)
         self.assertEqual(r.code, 2)
 
-    def test_category_change_bypasses_cooldown(self):
-        d = CooldownDecider(cooldown_sec=8.0)
-        self.assertTrue(d.decide(self._j(1, 0.0, 0.0), now=0.0).send)      # M_L
-        r = d.decide(self._j(3, 0.0, 1.0), now=1.0)                        # H_L 로 변경
+    def test_heavy_sends_immediately(self):
+        """많이오염(2)은 확인 창 없이 즉시 발송한다."""
+        d = CooldownDecider(cooldown_sec=8.0, escalate_sec=0.5)
+        r = d.decide(self._j(3, 0.0, 0.0), now=0.0)                        # count 3 → 많이오염
         self.assertTrue(r.send)
         self.assertEqual(r.code, 2)
+
+    def test_partial_waits_then_sends_one(self):
+        """부분오염(1)은 확인 창(0.5s) 동안 대기했다가, 격상 없으면 1 을 보낸다."""
+        d = CooldownDecider(cooldown_sec=8.0, escalate_sec=0.5)
+        self.assertFalse(d.decide(self._j(1, 0.0, 0.0), now=0.0).send)     # 창 시작 — 대기
+        self.assertFalse(d.decide(self._j(1, 0.0, 0.3), now=0.3).send)     # 아직 대기
+        r = d.decide(self._j(1, 0.0, 0.5), now=0.5)                        # 창 종료
+        self.assertTrue(r.send)
+        self.assertEqual(r.code, 1)
+
+    def test_partial_escalates_to_heavy_within_window(self):
+        """확인 창 안에서 많이오염(2)이 한 번이라도 나오면 2 로 격상해 보낸다."""
+        d = CooldownDecider(cooldown_sec=8.0, escalate_sec=0.5)
+        self.assertFalse(d.decide(self._j(1, 0.0, 0.0), now=0.0).send)     # 1 감지 → 창 시작
+        self.assertFalse(d.decide(self._j(3, 0.0, 0.2), now=0.2).send)     # 창 중 2 관측
+        r = d.decide(self._j(1, 0.0, 0.5), now=0.5)                        # 창 종료(현재 1이어도)
+        self.assertTrue(r.send)
+        self.assertEqual(r.code, 2)                                        # 격상되어 2 발송
+
+    def test_strict_cooldown_absorbs_after_send(self):
+        """확정 발송 후 cooldown 중에는 더 높은 severity 가 와도 흡수한다(엄격 쿨다운)."""
+        d = CooldownDecider(cooldown_sec=8.0, escalate_sec=0.5)
+        d.decide(self._j(1, 0.0, 0.0), now=0.0)                            # 창 시작
+        r0 = d.decide(self._j(1, 0.0, 0.5), now=0.5)                       # 창 종료 → 1 발송
+        self.assertTrue(r0.send)
+        self.assertEqual(r0.code, 1)
+        self.assertFalse(d.decide(self._j(3, 0.0, 1.0), now=1.0).send)     # cooldown 중 2 흡수
+        r = d.decide(self._j(3, 0.0, 8.5), now=8.5)                        # 만료 후 재발송
+        self.assertTrue(r.send)
+        self.assertEqual(r.code, 2)
+
+    def test_escalate_zero_sends_partial_immediately(self):
+        """escalate_sec=0 이면 확인 창 없이 부분오염도 즉시 발송한다(옛 동작)."""
+        d = CooldownDecider(cooldown_sec=8.0, escalate_sec=0.0)
+        r = d.decide(self._j(1, 0.0, 0.0), now=0.0)
+        self.assertTrue(r.send)
+        self.assertEqual(r.code, 1)
 
     def test_write_zero_on_normal_fires_once(self):
         d = CooldownDecider(cooldown_sec=8.0, write_zero_on_normal=True)
@@ -276,12 +313,13 @@ class TestRtspAndSettings(unittest.TestCase):
         changed = apply_settings(cfg, {
             "camera": {"ip": "192.168.5.60"},
             "plc": {"host": "192.168.5.199", "port": 2004},
-            "judge": {"conf": 0.4, "cooldown": 12},
+            "judge": {"conf": 0.4, "cooldown": 12, "escalate": 0.8},
         })
         self.assertEqual(changed, {"camera", "judge"})       # plc 는 기본값과 동일 -> 변화 없음
         self.assertIn("192.168.5.60", cfg.video.source)
         self.assertEqual(cfg.model.conf_threshold, 0.4)
         self.assertEqual(cfg.logic.cooldown_sec, 12)
+        self.assertEqual(cfg.logic.escalate_sec, 0.8)
 
     def test_empty_password_keeps_existing(self):
         from app.config import apply_settings, parse_rtsp
@@ -312,6 +350,60 @@ class TestRtspAndSettings(unittest.TestCase):
         cfg = self._cfg()
         with self.assertRaises(ValueError):
             apply_settings(cfg, {"judge": {"count_low": 5, "count_high": 2}})
+
+
+class TestModelSelection(unittest.TestCase):
+    """model_files 폴더의 .onnx 를 재시작 없이 골라 교체."""
+
+    def setUp(self):
+        import tempfile
+        from app.config import AppConfig
+
+        self.tmp = tempfile.mkdtemp()
+        root = Path(self.tmp)
+        (root / "history").mkdir()
+        (root / "best.onnx").write_bytes(b"a")
+        (root / "history" / "old.onnx").write_bytes(b"bb")
+        (root / "best.pt").write_bytes(b"ccc")            # .pt 는 목록에서 제외돼야 함
+        self.cfg = AppConfig()
+        self.cfg.model.onnx_path = str(root / "best.onnx")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_lists_only_onnx_including_subdirs(self):
+        from app.config import available_model_files
+
+        names = set(available_model_files(self.cfg).keys())
+        self.assertEqual(names, {"best.onnx", "history/old.onnx"})   # .pt 없음
+
+    def test_settings_dict_reports_current_and_available(self):
+        from app.config import settings_dict
+
+        m = settings_dict(self.cfg)["model"]
+        self.assertEqual(m["current"], "best.onnx")
+        self.assertEqual({e["name"] for e in m["available"]}, {"best.onnx", "history/old.onnx"})
+
+    def test_valid_switch_changes_path(self):
+        from app.config import apply_settings
+
+        changed = apply_settings(self.cfg, {"model": {"file": "history/old.onnx"}})
+        self.assertIn("model", changed)
+        self.assertTrue(self.cfg.model.onnx_path.endswith("old.onnx"))
+
+    def test_same_file_is_noop(self):
+        from app.config import apply_settings
+
+        self.assertNotIn("model", apply_settings(self.cfg, {"model": {"file": "best.onnx"}}))
+
+    def test_unknown_file_ignored_falls_back(self):
+        from app.config import apply_settings
+
+        before = self.cfg.model.onnx_path
+        changed = apply_settings(self.cfg, {"model": {"file": "../secret.onnx"}})
+        self.assertNotIn("model", changed)                          # 경로 탈출/미존재 → 무시
+        self.assertEqual(self.cfg.model.onnx_path, before)          # 기존 유지(폴백)
 
 
 class TestStateBuffers(unittest.TestCase):
@@ -374,6 +466,122 @@ class TestControlState(unittest.TestCase):
         s.queue_plc_code(1)
         s.set_test_mode(True)                             # 진입 시 큐 초기화
         self.assertEqual(s.pop_plc_codes(), [])
+
+
+class TestConveyorGate(unittest.TestCase):
+    """D8001 Conveyor RUN 게이트 — RUN(1) 일 때만 판정·전송."""
+
+    def test_shared_state_request_ack_cycle(self):
+        from app.state import SharedState
+
+        s = SharedState()
+        self.assertIsNone(s.take_conveyor_request())          # 요청 없음
+        seq = s.request_conveyor_read()
+        self.assertEqual(s.take_conveyor_request(), seq)      # 미처리 요청 감지
+        self.assertIsNone(s.get_conveyor_result(seq))         # 아직 결과 없음
+        s.set_conveyor_result(seq, {"ok": True, "run": True, "raw": 1})
+        self.assertIsNone(s.take_conveyor_request())          # 처리 완료 → 더 없음
+        self.assertEqual(s.get_conveyor_result(seq)["run"], True)
+
+    def _plc(self, enabled=True):
+        from app.config import AppConfig
+        from app.plc import PlcController
+
+        cfg = AppConfig()
+        cfg.plc.enabled = enabled
+        return PlcController(cfg)
+
+    def test_read_interprets_word_value(self):
+        from app.plc import CONVEYOR_RUN_ON
+
+        class _FakeClient:
+            def __init__(self, val):
+                self.val, self.connected = val, True
+
+            def read_word(self, name):
+                return self.val
+
+        plc = self._plc()
+        plc.client = _FakeClient(1)
+        self.assertEqual(plc.read_conveyor_run(), 1)
+        self.assertTrue(plc.read_conveyor_run() == CONVEYOR_RUN_ON)   # RUN
+        plc.client = _FakeClient(0)
+        self.assertEqual(plc.read_conveyor_run(), 0)                  # 정지
+        self.assertFalse(plc.read_conveyor_run() == CONVEYOR_RUN_ON)
+
+    def test_read_returns_none_when_disabled(self):
+        plc = self._plc(enabled=False)
+        self.assertIsNone(plc.read_conveyor_run())
+
+    def test_read_returns_none_on_error(self):
+        from app.xgt_client import XgtError
+
+        class _BadClient:
+            connected = False
+
+            def read_word(self, name):
+                raise XgtError("boom")
+
+        plc = self._plc()
+        plc.client = _BadClient()
+        self.assertIsNone(plc.read_conveyor_run())
+        self.assertIn("boom", plc.last_read_error)
+
+
+class TestResultPulse(unittest.TestCase):
+    """결과 코드 1/2 는 전송 후 result_pulse_sec 뒤 D8101 을 0 으로 되돌린다(펄스)."""
+
+    def _plc(self, pulse_sec=0.5):
+        from app.config import AppConfig
+        from app.plc import PlcController
+
+        cfg = AppConfig()
+        cfg.plc.enabled = True
+        cfg.plc.result_pulse_sec = pulse_sec
+        plc = PlcController(cfg)
+        writes: list = []
+
+        class _Rec:
+            connected = True
+
+            def write_word(self, name, value):
+                writes.append((name, value))
+
+            def read_word(self, name):
+                return 0
+
+        plc.client = _Rec()
+        return plc, writes
+
+    def test_pulse_codes_are_one_and_two(self):
+        from app.plc import PULSE_CODES
+
+        self.assertEqual(set(PULSE_CODES), {1, 2})     # 0 은 이미 0, 9 는 래치 유지
+
+    def test_pulse_writes_zero_after_hold(self):
+        plc, writes = self._plc(0.5)
+        addr = plc.cfg.addr_result
+        self.assertTrue(plc.write_result(1))                     # 코드 1 전송
+        plc.arm_result_reset(now=100.0)
+        self.assertEqual(writes[-1], (addr, 1))
+        self.assertFalse(plc.service_result_reset(now=100.4))    # 아직 유지 → 0 안 씀
+        self.assertEqual(writes[-1], (addr, 1))
+        self.assertTrue(plc.service_result_reset(now=100.5))     # 만료 → 0 복귀
+        self.assertEqual(writes[-1], (addr, 0))
+        self.assertFalse(plc.service_result_reset(now=101.0))    # 1회만 (재전송 없음)
+
+    def test_cancel_prevents_reset(self):
+        plc, writes = self._plc(0.5)
+        addr = plc.cfg.addr_result
+        plc.arm_result_reset(now=0.0)
+        plc.cancel_result_reset()                                # 0·9 직접 write 시 예약 취소
+        self.assertFalse(plc.service_result_reset(now=10.0))
+        self.assertNotIn((addr, 0), writes)
+
+    def test_pulse_disabled_when_zero_sec(self):
+        plc, _ = self._plc(0.0)
+        plc.arm_result_reset(now=0.0)                            # pulse_sec=0 → 예약 자체 안 됨
+        self.assertFalse(plc.service_result_reset(now=100.0))
 
 
 class TestRecorder(unittest.TestCase):

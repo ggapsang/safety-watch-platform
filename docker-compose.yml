@@ -15,7 +15,9 @@ services:
       - .env
 
     # env_file 보다 우선한다 — 컨테이너 내부 포트는 항상 8080 으로 고정.
+    #  MODEL_DEVICE=cuda: 이미지 기본값(cpu)을 덮어 개발 PC(RTX)에서는 GPU 로 추론.
     environment:
+      MODEL_DEVICE: "cuda"
       DASHBOARD_HOST: "0.0.0.0"
       DASHBOARD_PORT: "8080"
       RUNTIME_CONFIG_PATH: "/app/runtime/settings.json"

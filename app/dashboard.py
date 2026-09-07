@@ -10,10 +10,12 @@ Docker headless 환경이라 화면 직접 출력이 불가하므로 브라우�
   GET  /capture/{id}.jpg   캡처 이미지
   GET  /api/settings       현재 설정
   POST /api/settings       설정 변경(카메라/PLC/판정 기준) — 즉시 반영 + 파일 저장
+  POST /api/conveyor_check D8001(Conveyor RUN) 즉시 읽기 — 테스트용
   POST /api/record/start   녹화 시작 (최대 60초, 도달 시 자동 정지)
   POST /api/record/stop    녹화 정지
   GET  /api/recordings     녹화 파일 목록
   GET  /recording/{name}   녹화 파일 다운로드(mp4)
+  GET  /help               설치·사용 설명서(도움말) — 새 창으로 표시
   GET  /healthz            헬스체크
 """
 
@@ -23,6 +25,8 @@ import asyncio
 import logging
 import threading
 import time
+
+from .help_page import HELP_HTML
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +60,10 @@ button.ctl{font-weight:600}
          padding:10px 18px;background:#1b2028;border-bottom:1px solid var(--line)}
 #testbar.on{display:flex}
 .tlabel{font-size:12px;color:var(--muted)}
+.tsep{width:1px;height:22px;background:var(--line);margin:0 2px}
+#btnConv{font-weight:600}
+#btnConv.run{border-color:var(--ok);color:var(--ok)}
+#btnConv.stop{border-color:var(--warn);color:var(--warn)}
 .pcode{border-color:var(--c);color:var(--c);font-weight:700}
 .pcode:hover{background:var(--c);color:#0b0e12}
 main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr) minmax(210px,.62fr);
@@ -107,14 +115,15 @@ input:focus{outline:none;border-color:var(--accent)}
 </style></head><body>
 <header>
   <h1>컨베이어 부적합(쓰레기) 탐지 — PC 추론</h1>
-  <button id="btnPlay" class="ctl">▶ 시작</button>
+  <button id="btnPlay" class="ctl">시작</button>
   <button id="btnTest" class="ctl">PLC 테스트</button>
   <span class="chip"><span id="vdot" class="dot"></span>영상</span>
   <span class="chip"><span id="pdot" class="dot"></span>PLC</span>
   <span class="chip" id="perf">-</span>
   <span class="spacer"></span>
-  <button id="btnRec">● 녹화</button>
-  <button id="btnCfg">⚙ 설정</button>
+  <button id="btnRec">녹화</button>
+  <button id="btnCfg">설정</button>
+  <button id="btnHelp" title="설치·사용 설명서를 새 창으로 엽니다">도움말</button>
 </header>
 <div id="testbar">
   <span class="tlabel">PLC 테스트 — 투입물과 무관하게 코드를 직접 전송합니다 (자동 판정 일시정지됨)</span>
@@ -123,6 +132,9 @@ input:focus{outline:none;border-color:var(--accent)}
   <button class="pcode" data-code="2" style="--c:var(--bad)">2 많이오염 · 역회전</button>
   <button class="pcode" data-code="9" style="--c:var(--bad)">9 판정실패 · 알람</button>
   <span id="testmsg" class="hint"></span>
+  <span class="tsep"></span>
+  <button id="btnConv" title="D8001 을 읽어 컨베이어 가동 상태를 확인합니다(전송 없음)">Conveyor RUN 상태 확인</button>
+  <span id="convmsg" class="hint"></span>
 </div>
 
 <main>
@@ -142,9 +154,11 @@ input:focus{outline:none;border-color:var(--accent)}
       <tr><td>max count (2초)</td><td id="mc">-</td></tr>
       <tr><td>max area</td><td id="ma">-</td></tr>
       <tr><td>현재 검출 수</td><td id="dc">-</td></tr>
+      <tr><td>컨베이어 RUN (D8001)</td><td id="cv">-</td></tr>
       <tr><td>PLC 마지막 write</td><td id="pw">-</td></tr>
       <tr><td>PLC write 성공/실패</td><td id="pn">-</td></tr>
       <tr><td>백엔드</td><td id="be">-</td></tr>
+      <tr><td>모델</td><td id="mf">-</td></tr>
     </table></section>
     <section class="card"><h2>시스템 로그<span class="hint">conf · 후처리 전 라벨 포함</span></h2>
       <div id="logbox"></div></section>
@@ -176,7 +190,15 @@ input:focus{outline:none;border-color:var(--accent)}
         <div><label>PLC IP</label><input id="p_host" placeholder="192.168.5.199"></div>
         <div><label>포트</label><input id="p_port" type="number" placeholder="2004"></div>
       </div>
-      <div class="hint" style="margin-top:6px">D8100 PC Ready · D8101 결과코드(0/1/2/9) write 전용</div>
+      <div class="hint" style="margin-top:6px">D8101 결과코드(0/1/2/9) write · D8001 Conveyor RUN read · D8100 미사용</div>
+    </fieldset>
+    <fieldset><legend>모델</legend>
+      <div><label>추론 모델 (onnx)</label>
+        <select id="m_file" style="width:100%;background:#0f1216;color:var(--fg);
+          border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:inherit"></select></div>
+      <div class="hint" style="margin-top:6px">
+        model_files 폴더의 .onnx 목록입니다. 저장하면 재시작 없이 교체되며(수 초 소요),
+        로드에 실패하면 이전 모델을 유지합니다. conf 등 판정값은 그대로 유지됩니다.</div>
     </fieldset>
     <fieldset><legend>판정 기준</legend>
       <div class="grid2">
@@ -187,10 +209,12 @@ input:focus{outline:none;border-color:var(--accent)}
         <div><label>부분오염 기준 — area low (%)</label><input id="j_al" type="number" step="0.1" min="0"></div>
         <div><label>많이오염 기준 — area high (%)</label><input id="j_ah" type="number" step="0.1" min="0"></div>
         <div><label>cooldown (초)</label><input id="j_cd" type="number" step="1" min="1"></div>
+        <div><label>부분오염 확인 대기 (초)</label><input id="j_esc" type="number" step="0.1" min="0"></div>
       </div>
       <div class="hint" style="margin-top:6px">
         count: &lt;low → 정상 / ≥high → 많이오염 / 그 외 부분오염<br>
-        area: &lt;low → 정상 / &gt;high → 많이오염 / 그 외 부분오염 · 최종 = 둘 중 높은 쪽
+        area: &lt;low → 정상 / &gt;high → 많이오염 / 그 외 부분오염 · 최종 = 둘 중 높은 쪽<br>
+        확인 대기: 부분오염 감지 후 이 시간 동안 관찰해 많이오염이 나오면 격상 전송(0=즉시)
       </div>
     </fieldset>
   </form>
@@ -221,12 +245,15 @@ async function tick(){
     $('mc').textContent=s.max_count;
     $('ma').textContent=s.max_area.toFixed(3)+(s.area_unit==='percent'?' %':'');
     $('dc').textContent=s.det_count;
+    $('cv').textContent=!s.plc_enabled?'PLC 비활성(게이트 해제)':(s.conveyor_run?'RUN(가동)':'정지');
+    $('cv').style.color=!s.plc_enabled?'var(--muted)':(s.conveyor_run?'var(--ok)':'var(--warn)');
     $('pw').textContent=s.plc_last_error?('오류: '+s.plc_last_error):s.plc_last_write;
     $('pn').textContent=`${s.plc_write_ok} / ${s.plc_write_fail}`;
     $('be').textContent=`${s.backend} · ${s.device} · ${s.infer_mode}`;
+    $('mf').textContent=s.model_file||'-';
     // 운전 제어 반영
     const run=s.pipeline_running, tm=s.test_mode;
-    $('btnPlay').textContent=run?'⏸ 중지':'▶ 시작';
+    $('btnPlay').textContent=run?'중지':'시작';
     $('btnPlay').classList.toggle('on',run);
     $('btnTest').textContent=tm?'PLC 테스트 종료':'PLC 테스트';
     $('btnTest').classList.toggle('on',tm);
@@ -258,6 +285,18 @@ document.querySelectorAll('.pcode').forEach(b=>b.onclick=async()=>{
     $('testmsg').textContent=r.ok?`코드 ${code} 전송 요청됨`:(j.detail||'실패');
   }catch(e){$('testmsg').style.color='var(--bad)';$('testmsg').textContent='실패: '+e;}
 });
+$('btnConv').onclick=async()=>{
+  const b=$('btnConv'); b.classList.remove('run','stop');
+  $('convmsg').style.color='var(--muted)'; $('convmsg').textContent='읽는 중…';
+  try{
+    const r=await fetch('/api/conveyor_check',{method:'POST'});
+    const j=await r.json();
+    if(!r.ok||!j.ok){$('convmsg').style.color='var(--bad)';$('convmsg').textContent=j.detail||'실패';return;}
+    b.classList.add(j.run?'run':'stop');
+    $('convmsg').style.color=j.run?'var(--ok)':'var(--warn)';
+    $('convmsg').textContent=j.detail;
+  }catch(e){$('convmsg').style.color='var(--bad)';$('convmsg').textContent='실패: '+e;}
+};
 
 let logSeq=0;
 async function pollLogs(){
@@ -320,7 +359,7 @@ async function pollRecs(){
   try{
     const j=await (await fetch('/api/recordings',{cache:'no-store'})).json();
     recActive=j.status.active;
-    $('btnRec').textContent=recActive?'■ 정지':'● 녹화';
+    $('btnRec').textContent=recActive?'정지':'녹화';
     $('btnRec').style.borderColor=recActive?'var(--bad)':'';
     $('btnRec').style.color=recActive?'var(--bad)':'';
     $('recstate').textContent=recActive
@@ -346,21 +385,34 @@ $('btnCfg').onclick=async()=>{
   $('c_user').value=s.camera.user; $('c_pw').value=s.camera.password;
   $('c_path').value=s.camera.path;
   $('p_host').value=s.plc.host; $('p_port').value=s.plc.port;
+  const msel=$('m_file'); msel.innerHTML='';
+  (s.model&&s.model.available||[]).forEach(m=>{
+    const o=document.createElement('option'); o.value=m.name;
+    o.textContent=m.name+' ('+m.size_mb+' MB)';
+    if(m.name===s.model.current) o.selected=true;
+    msel.appendChild(o);
+  });
   $('j_conf').value=s.judge.conf; $('j_iou').value=s.judge.iou;
   $('j_cl').value=s.judge.count_low; $('j_ch').value=s.judge.count_high;
   $('j_al').value=s.judge.area_low; $('j_ah').value=s.judge.area_high;
-  $('j_cd').value=s.judge.cooldown;
+  $('j_cd').value=s.judge.cooldown; $('j_esc').value=s.judge.escalate;
   $('saveMsg').textContent=''; dlg.showModal();
 };
+// ── 도움말 (새 창) ────────────────────────────────────────────────
+$('btnHelp').onclick=()=>window.open('/help','helpwin',
+  'width=1180,height=900,menubar=no,toolbar=no,location=no');
+
 $('btnCancel').onclick=()=>dlg.close();
 $('btnSave').onclick=async()=>{
   const body={
     camera:{ip:$('c_ip').value.trim(),port:+$('c_port').value||554,
             user:$('c_user').value,password:$('c_pw').value,path:$('c_path').value.trim()},
     plc:{host:$('p_host').value.trim(),port:+$('p_port').value||2004},
+    model:{file:$('m_file').value},
     judge:{conf:+$('j_conf').value,iou:+$('j_iou').value,
            count_low:+$('j_cl').value,count_high:+$('j_ch').value,
-           area_low:+$('j_al').value,area_high:+$('j_ah').value,cooldown:+$('j_cd').value}
+           area_low:+$('j_al').value,area_high:+$('j_ah').value,cooldown:+$('j_cd').value,
+           escalate:+$('j_esc').value}
   };
   $('saveMsg').textContent='저장 중…';
   try{
@@ -396,6 +448,10 @@ def create_app(state, cfg, on_settings=None, recorder=None):
     @api.get("/", response_class=HTMLResponse)
     def index() -> str:
         return _HTML
+
+    @api.get("/help", response_class=HTMLResponse)
+    def help_page() -> str:
+        return HELP_HTML
 
     @api.get("/healthz", response_class=PlainTextResponse)
     def healthz() -> str:
@@ -460,6 +516,18 @@ def create_app(state, cfg, on_settings=None, recorder=None):
             raise HTTPException(status_code=400, detail=f"허용 코드: {sorted(VALID_CODES)}")
         state.queue_plc_code(code)
         return JSONResponse({"ok": True, "queued": code})
+
+    @api.post("/api/conveyor_check")
+    def conveyor_check() -> JSONResponse:
+        """D8001(Conveyor RUN) 즉시 읽기. XGT 는 추론 루프 전용이라 루프에 위임하고 결과를 기다린다."""
+        seq = state.request_conveyor_read()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            res = state.get_conveyor_result(seq)
+            if res is not None:
+                return JSONResponse({"ok": res.get("ok", False), **res})
+            time.sleep(0.03)
+        raise HTTPException(status_code=504, detail="PLC 응답 시간 초과(추론 루프 미동작?)")
 
     def _control_state() -> dict:
         running, tm = state.control()
