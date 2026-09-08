@@ -1,0 +1,59 @@
+# MediaMTX — 미디어 평면.
+#
+# 카메라 경로는 여기 적지 않는다. 서버가 Control API(:9997)로 런타임에 등록한다.
+# 어드민에서 카메라를 추가하면 즉시 반영되고, 설정 파일을 고쳐 재시작할 일이 없다.
+
+logLevel: info
+logDestinations: [stdout]
+
+# ── Control API — 서버가 경로를 등록·조회하는 통로 ───────────────────────
+api: yes
+apiAddress: :9997
+
+# ── Playback — 녹화 구간 목록 조회와 추출 ────────────────────────────────
+playback: yes
+playbackAddress: :9996
+
+# ── 수집·배포 프로토콜 ──────────────────────────────────────────────────
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]          # 폐쇄망 UDP 문제를 피한다
+
+webrtc: yes
+webrtcAddress: :8889
+# 브라우저가 직접 닿는 주소. 다른 PC 에서 볼 거라면 서버 PC 의 IP 를 적어야 한다.
+webrtcAdditionalHosts: [localhost]
+
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+
+rtmp: no
+srt: no
+
+# ── 녹화 기본값 ─────────────────────────────────────────────────────────
+# 실제 on/off 와 보존기간은 경로별로 서버가 지정한다(정책은 코어의 몫).
+record: no
+recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+recordFormat: fmp4
+recordPartDuration: 1s
+recordSegmentDuration: 1h
+recordDeleteAfter: 72h
+
+# ── 인증 ────────────────────────────────────────────────────────────────
+# 주의: 폐쇄망 전제로 열어 둔다. 외부에 노출되는 망이면 internal 사용자를 정의해야 한다.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+
+paths:
+  # 서버가 등록하지 않은 경로는 받지 않는다. 오탈자로 엉뚱한 경로가 생기는 것을 막는다.
+  # (all_others 를 비워 두면 미등록 경로 접근이 거부된다.)

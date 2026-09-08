@@ -1,0 +1,223 @@
+/** 카메라 현황 — 상태 확인과 '이름 · 설치 위치' 인라인 수정.
+ *
+ * 시안에 있던 '설치 위치를 표에서 바로 고치는' 흐름을 유지했다. 현장에서 카메라를 옮기면
+ * 관리자 화면까지 들어가지 않고 여기서 고치는 편이 자연스럽다.
+ * (접속 정보·솔루션 매핑 같은 구조적 변경은 관리자 화면에서 한다.)
+ */
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
+
+import { LiveVideo } from "../components/LiveVideo";
+import {
+  Button,
+  Card,
+  Dot,
+  EmptyRow,
+  ErrorText,
+  Field,
+  Input,
+  KpiCard,
+  Modal,
+  Section,
+  Table,
+  Tabs,
+  Td,
+  cx,
+} from "../components/ui";
+import { api, ApiError } from "../lib/api";
+import { fmtAgo } from "../lib/format";
+import { useCameras, useClock, useLiveBoxes } from "../lib/hooks";
+import type { Camera } from "../lib/types";
+
+type Filter = "all" | "normal" | "offline";
+
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "전체" },
+  { id: "normal", label: "정상" },
+  { id: "offline", label: "이상" },
+];
+
+export function Cameras() {
+  const { state } = useLocation() as { state?: { filter?: Filter } };
+  const now = useClock();
+  const { data: cameras = [], isLoading } = useCameras();
+  const liveBoxes = useLiveBoxes();
+  const [filter, setFilter] = useState<Filter>(state?.filter ?? "all");
+  const [editing, setEditing] = useState<Camera | null>(null);
+  const [focused, setFocused] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (state?.filter) setFilter(state.filter);
+  }, [state?.filter]);
+
+  const shown = cameras.filter((c) =>
+    filter === "all" ? true : filter === "normal" ? c.status === "normal" : c.status !== "normal",
+  );
+  const normal = cameras.filter((c) => c.status === "normal").length;
+
+  return (
+    <>
+      <div className="mb-7 grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <KpiCard label="전체 카메라" value={cameras.length} sub="물리 채널" />
+        <KpiCard label="정상" value={normal} sub="정상 가동" />
+        <KpiCard
+          label="이상"
+          value={cameras.length - normal}
+          sub="오프라인"
+          variant={cameras.length - normal ? "warn" : "default"}
+        />
+        <KpiCard
+          label="금일 이벤트"
+          value={cameras.reduce((sum, c) => sum + c.today, 0)}
+          sub="전 카메라 합계"
+        />
+      </div>
+
+      <Section title="라이브 확인" desc="카메라를 선택하면 아래 목록에서 강조됩니다">
+        {cameras.length === 0 ? (
+          <Card className="py-14 text-center text-[13px] text-muted-soft">
+            등록된 카메라가 없습니다.
+          </Card>
+        ) : (
+          <div className="grid gap-5 md:grid-cols-2">
+            {cameras.map((cam) => (
+              <LiveVideo
+                key={cam.id}
+                camera={cam}
+                boxes={liveBoxes[cam.id]}
+                now={now}
+                onClick={() => setFocused(cam.id === focused ? null : cam.id)}
+                className={cx(focused === cam.id && "ring-2 ring-primary")}
+              />
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section
+        title="카메라 목록"
+        desc="물리 카메라 상태 및 솔루션 매핑"
+        actions={<Tabs tabs={FILTERS} active={filter} onChange={setFilter} />}
+      >
+        <Card>
+          <Table
+            head={[
+              "상태",
+              "카메라",
+              "설치 위치",
+              "IP",
+              "최근 수신",
+              "오늘 / 누적",
+              "",
+            ]}
+          >
+            {isLoading ? (
+              <EmptyRow colSpan={7} text="불러오는 중…" />
+            ) : shown.length === 0 ? (
+              <EmptyRow colSpan={7} text="조건에 맞는 카메라가 없습니다." />
+            ) : (
+              shown.map((c) => (
+                <tr
+                  key={c.id}
+                  className={cx(
+                    "transition-colors hover:bg-surface-soft",
+                    focused === c.id && "bg-primary-soft/40",
+                  )}
+                >
+                  <Td>
+                    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                      <Dot ok={c.status === "normal"} />
+                      <span className={c.status === "normal" ? "text-body" : "text-error"}>
+                        {c.status === "normal" ? "정상" : "오프라인"}
+                      </span>
+                    </span>
+                  </Td>
+                  <Td className="font-medium text-body-strong">{c.name}</Td>
+                  <Td>{c.location}</Td>
+                  <Td className="tnum">{c.ip}</Td>
+                  <Td className="whitespace-nowrap text-muted">
+                    {c.last_seen_at ? fmtAgo(c.last_seen_at) : "-"}
+                  </Td>
+                  <Td className="tnum whitespace-nowrap">
+                    {c.today} / {c.total}
+                  </Td>
+                  <Td className="text-right">
+                    <Button size="sm" onClick={() => setEditing(c)}>
+                      수정
+                    </Button>
+                  </Td>
+                </tr>
+              ))
+            )}
+          </Table>
+          {shown.some((c) => c.last_error) && (
+            <p className="mt-4 text-[12px] text-muted">
+              오프라인 사유는 관리자 → 시스템 상태에서 확인할 수 있습니다.
+            </p>
+          )}
+        </Card>
+      </Section>
+
+      <QuickEdit camera={editing} onClose={() => setEditing(null)} />
+    </>
+  );
+}
+
+/** 이름·설치 위치만 고치는 가벼운 편집. 구조적 설정은 관리자 화면으로 보낸다. */
+function QuickEdit({ camera, onClose }: { camera: Camera | null; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState("");
+  const [location, setLocation] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setName(camera?.name ?? "");
+    setLocation(camera?.location ?? "");
+    setError("");
+  }, [camera?.id]);
+
+  const save = useMutation({
+    mutationFn: () => api.patchCamera(camera!.id, { name: name.trim(), location: location.trim() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["cameras"] });
+      onClose();
+    },
+    onError: (err) =>
+      setError(err instanceof ApiError ? err.message : "저장 중 오류가 발생했습니다."),
+  });
+
+  if (!camera) return null;
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`카메라 #${camera.id} 수정`}
+      width={480}
+      footer={
+        <>
+          <ErrorText>{error}</ErrorText>
+          <div className="flex-1" />
+          <Button onClick={onClose}>취소</Button>
+          <Button variant="primary" disabled={save.isPending} onClick={() => save.mutate()}>
+            저장
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <Field label="카메라 이름">
+          <Input value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="설치 위치" hint="통계·이벤트 목록에서 카메라를 식별하는 이름입니다.">
+          <Input value={location} onChange={(e) => setLocation(e.target.value)} />
+        </Field>
+        <div className="rounded-lg border border-hairline bg-surface-soft px-4 py-3 text-[12.5px] text-muted">
+          IP·계정·솔루션 매핑 변경은 <b className="font-semibold text-body">관리자</b> 화면에서
+          할 수 있습니다.
+        </div>
+      </div>
+    </Modal>
+  );
+}

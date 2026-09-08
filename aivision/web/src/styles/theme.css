@@ -1,0 +1,135 @@
+/* AI Vision 통합관제 대시보드 — 디자인 토큰
+ *
+ * 색·타이포는 refs/demo 의 시안에서 가져왔다. 따뜻한 크림/점토 계열의 밝은 테마이고,
+ * 영상 영역만 어둡게 눌러 화면 안에서 '보는 곳'이 분명해지도록 설계돼 있다.
+ *
+ * 토큰만 여기서 정의하고, 컴포넌트는 토큰 이름으로만 색을 부른다.
+ * (예: text-muted, bg-surface-card, border-hairline)
+ */
+@import "tailwindcss";
+
+/* Pretendard — 실제로 쓰는 3종(400/600/700)만 싣는다.
+ * 패키지의 pretendard.css 를 그대로 import 하면 9종 전부(약 17MB)가 dist 에 들어간다.
+ * 폐쇄망 설치가 전제라 CDN 은 쓰지 않고 번들에 포함한다. */
+@font-face {
+  font-family: "Pretendard";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("pretendard/dist/web/static/woff2/Pretendard-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Pretendard";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("pretendard/dist/web/static/woff2/Pretendard-SemiBold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Pretendard";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("pretendard/dist/web/static/woff2/Pretendard-Bold.woff2") format("woff2");
+}
+
+@theme {
+  --font-sans: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+
+  /* 바탕 */
+  --color-canvas: #faf9f5;
+  --color-surface-soft: #f5f0e8;
+  --color-surface-card: #efe9de;
+  --color-cream-strong: #e8e0d2;
+
+  /* 글자 */
+  --color-ink: #141413;
+  --color-body-strong: #252523;
+  --color-body: #3d3d3a;
+  --color-muted: #6c6a64;
+  --color-muted-soft: #8e8b82;
+
+  /* 강조 */
+  --color-primary: #cc785c;
+  --color-primary-active: #a9583e;
+  --color-primary-soft: #f0ddd3;
+  --color-teal: #5db8a6;
+
+  /* 상태 */
+  --color-success: #5db872;
+  --color-warning: #d4a017;
+  --color-error: #c64545;
+
+  /* 선 */
+  --color-hairline: #e6dfd8;
+  --color-hairline-soft: #ebe6df;
+
+  /* 영상 패널(어두운 영역) */
+  --color-video-bg: #181715;
+  --color-video-line: #252320;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-body);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.01em;
+  }
+
+  /* 관제 화면은 숫자를 세로로 훑는 일이 많다. 자릿수가 흔들리지 않게 고정폭 숫자를 쓴다. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-cream-strong);
+    border-radius: 6px;
+    border: 2px solid var(--color-canvas);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  /* 라이브 영상 위 스캔라인 — '실시간으로 보고 있다'는 감각을 주는 장식 */
+  @keyframes scan {
+    0% {
+      transform: translateY(0);
+    }
+    100% {
+      transform: translateY(120vh);
+    }
+  }
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.25;
+    }
+  }
+  .animate-scan {
+    animation: scan 6s linear infinite;
+  }
+  .animate-blink {
+    animation: blink 1.4s ease-in-out infinite;
+  }
+}

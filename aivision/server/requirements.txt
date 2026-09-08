@@ -1,0 +1,25 @@
+# ── 웹 ──────────────────────────────────────────────────────────────────
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+pydantic-settings>=2.6
+
+# ── DB ──────────────────────────────────────────────────────────────────
+SQLAlchemy[asyncio]>=2.0.36
+asyncpg>=0.30
+alembic>=1.14
+# 개발 시 SQLite 로 띄우고 싶을 때만 필요 (DATABASE_URL=sqlite+aiosqlite:///./dev.db)
+aiosqlite>=0.20
+
+# ── MQTT (카메라 ONVIF 이벤트 수신) ─────────────────────────────────────
+aiomqtt>=2.3
+
+# ── 영상 (RTSP 수신 → MJPEG 재송출) ─────────────────────────────────────
+opencv-python-headless>=4.10
+numpy>=1.26,<3
+
+# ── 기타 ────────────────────────────────────────────────────────────────
+cryptography>=43        # 카메라 비밀번호 암호화 저장
+httpx>=0.27             # 카메라 연결 테스트(HTTP/ONVIF 프로브)
+# Windows 에는 IANA 시간대 DB 가 없다. 통계는 현장 로컬 시간대로 끊으므로 필수.
+tzdata>=2024.2 ; sys_platform == "win32"

@@ -1,0 +1,122 @@
+# AI Vision 통합관제 대시보드 — 운영 스택
+#
+#   [네트워크 카메라] --RTSP--> [server] --MJPEG--> [브라우저]
+#          |                       ^
+#          +--MQTT(ONVIF 이벤트)-->[mosquitto]<--WebSocket-- [브라우저: MQTT 로그 화면]
+#                                  |
+#                              [postgres]
+#
+# 사용: docker compose -f deploy/docker-compose.yml up -d --build
+name: aivision
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aivision}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aivision}
+      POSTGRES_DB: ${POSTGRES_DB:-aivision}
+      # 한국어 정렬·시간대
+      TZ: ${TZ:-Asia/Seoul}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aivision} -d ${POSTGRES_DB:-aivision}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      # 분석·점검 도구(psql, DBeaver 등)로 직접 붙을 수 있게 열어 둔다.
+      # 주의: 열려 있는 만큼 POSTGRES_PASSWORD 를 기본값으로 두면 안 된다.
+      - "${POSTGRES_PORT:-11882}:5432"
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      # MQTT TCP 는 표준 포트(1883)를 그대로 쓴다. 카메라의 기본값이 1883 이라,
+      # 여기를 옮기면 현장 카메라마다 설정을 바꿔야 한다. 포트 충돌은 이 PC 안의 문제일 뿐이고
+      # 컨테이너 안쪽은 어차피 1883 이므로, 호스트에서 1883 을 비워 두는 편이 낫다.
+      # (웹소켓 9001 은 브라우저만 쓰고 설정 지점이 .env 한 곳이라 11881 로 옮겼다.)
+      - "${MQTT_TCP_PORT:-1883}:1883"     # 카메라 → 브로커 (MQTT over TCP)
+      - "${MQTT_WS_PORT:-11881}:9001"     # 브라우저 → 브로커 (WebSocket, 'MQTT 로그' 화면)
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - mqtt-data:/mosquitto/data
+      - mqtt-log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/#' -C 1 -W 3 -q 0 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    ports:
+      # 분석 모듈이 영상을 가져가는 곳. 카메라가 아니라 여기로 붙어야 카메라 부하가 늘지 않는다.
+      - "${RTSP_PORT:-8554}:8554"
+      # 브라우저용 WebRTC/HLS. 지금은 MJPEG 을 쓰지만 배선은 열어 둔다.
+      - "${WEBRTC_PORT:-11884}:8889"
+      - "${HLS_PORT:-11885}:8888"
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
+      - recordings:/recordings
+    # 헬스체크를 두지 않는다. 이 이미지는 셸도 wget 도 없는 최소 이미지라
+    # CMD-SHELL 이 아예 실행되지 않고 영원히 unhealthy 로 남는다(잘못된 경보).
+    # 미디어 서버 상태는 서버가 Control API 로 확인해 /api/system 에 보여 준다.
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+      mediamtx:
+        condition: service_started
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aivision}:${POSTGRES_PASSWORD:-aivision}@db:5432/${POSTGRES_DB:-aivision}
+      # 서버는 컨테이너 네트워크 안에서 붙으므로 항상 표준 포트다.
+      # (위 ports: 의 호스트 포트는 '바깥에서 보이는 주소'일 뿐 여기와 무관하다.)
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      # 브라우저가 직접 붙을 브로커 주소 — 컨테이너 내부 이름이 아니라 '호스트에서 보이는 주소'여야 한다.
+      MQTT_WS_URL: ${MQTT_WS_URL:-ws://localhost:11881}
+      # 미디어 평면. direct 로 바꾸면 미디어 서버 없이 카메라에 직접 붙는다(fan-out·녹화 없음).
+      MEDIA_BACKEND: ${MEDIA_BACKEND:-mediamtx}
+      MEDIAMTX_API_URL: http://mediamtx:9997
+      MEDIAMTX_PLAYBACK_URL: http://mediamtx:9996
+      MEDIAMTX_RTSP_HOST: mediamtx:8554
+      # 브라우저가 닿는 주소 — 컨테이너 이름이 아니라 밖에서 보이는 주소여야 한다.
+      MEDIAMTX_PUBLIC_URL: ${MEDIAMTX_PUBLIC_URL:-http://localhost:11884}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 를 .env 에 설정하세요 (카메라 비밀번호 암호화 키)}
+      SNAPSHOT_DIR: /data/snapshots
+      # 이벤트 클립은 코어 자산이라 우리 볼륨에 둔다(미디어 서버 세그먼트 회전과 무관).
+      CLIP_DIR: /data/clips
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${HTTP_PORT:-11880}:8000"
+    volumes:
+      - media-data:/data
+      # 모델 파일은 호스트에서 넣는다(YOLO 소스 활성화 시). 지금은 비어 있어도 무방.
+      - ../models:/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health').read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db-data:
+  recordings:      # 미디어 서버의 상시 녹화 세그먼트 (회전 삭제됨)
+  media-data:      # 코어 자산 — 스냅샷과 이벤트 클립 (오래 보관)
+  mqtt-data:
+  mqtt-log:
