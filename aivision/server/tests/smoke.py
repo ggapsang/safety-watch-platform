@@ -270,6 +270,98 @@ async def main() -> int:
                 "topic": "E4:30:22:F3:31:AA/fireAlarm", "payload": {}})
             check("전송 격리(MQTT 규칙은 HTTP 에 안 걸림)", r.json()["matched"] == 0, r.text)
 
+            # ── 아웃바운드: outbox 가 실제로 동작하는가 ─────────────────
+            # 여기서는 브로커가 없다(MQTT_HOST=127.0.0.1). 즉 발송은 반드시 실패한다.
+            # 그 상황에서 이벤트를 잃지 않고 재시도 대기로 남는지가 이 기능의 값이다.
+            from aivision_server.services import outbound as ob
+
+            fields = (await c.get("/api/outbound/fields")).json()
+            check("템플릿 필드 목록 제공", "event.code" in fields and "boxes_json" in fields,
+                  str(fields))
+
+            r = await c.post("/api/outbound/targets", json={
+                "name": "상위 관제", "kind": "mqtt",
+                "config": {"topic_template": "plant1/alarm/{camera.id}", "qos": 0},
+                "payload_template": '{"e":"{event.code}","item":"{item.code}"}',
+                "max_attempts": 3, "retry_backoff_sec": 1.0})
+            check("아웃바운드 대상 생성 201", r.status_code == 201, r.text)
+            target_id = r.json()["id"]
+
+            r = await c.post("/api/outbound/targets", json={"name": "웹훅", "kind": "webhook"})
+            check("미지원 종류 400", r.status_code == 400, r.text)
+
+            # 필터가 걸리는 대상도 하나 만든다(이 이벤트와 맞지 않는 항목)
+            await c.post("/api/outbound/targets", json={
+                "name": "다른 항목만", "kind": "mqtt", "solution_codes": ["ITEM-B"],
+                "config": {"topic_template": "x/{event.code}"}})
+
+            # 적재 대상 이벤트를 **명시적으로** 고른다. '최근 것' 을 쓰면 앞선 테스트가
+            # 남긴 항목에 따라 필터 결과가 달라져 테스트가 흔들린다.
+            evs = await events()
+            picked = [e for e in evs["items"] if e["sol"] == "ITEM-A"]
+            check("적재용 이벤트 확보", len(picked) == 1, str([e["sol"] for e in evs["items"]]))
+            target_event = picked[0]["id"]
+
+            async with sessionmaker()() as odb:
+                from sqlalchemy import select as _sel
+
+                from aivision_server.models import Event as _Ev
+
+                ev = (await odb.execute(_sel(_Ev).where(_Ev.code == target_event)
+                                        )).scalars().unique().first()
+                made = await ob.enqueue_for_event(odb, ev)
+            # 대상 둘 중 하나는 ITEM-B 만 받으므로 ITEM-A 이벤트에는 걸리지 않아야 한다.
+            check("조건에 맞는 대상만 적재", made == 1, f"{made}건 적재됨")
+
+            dels = (await c.get("/api/outbound/deliveries")).json()
+            check("outbox 에 대기로 남음", dels and dels[0]["status"] == "pending", str(dels[:1]))
+            check("토픽 템플릿 치환",
+                  dels and dels[0]["topic"] == f"plant1/alarm/{cid}", str(dels[:1]))
+            check("페이로드 템플릿 치환",
+                  dels and target_event in (dels[0].get("topic", "") + str(dels[0])),
+                  str(dels[:1]))
+
+            # 발송 시도 -> 브로커가 없으니 실패하고 재시도 대기로 남아야 한다
+            r = await c.post("/api/outbound/drain")
+            check("발송 시도됨", r.json()["handled"] == 1, r.text)
+            dels = (await c.get("/api/outbound/deliveries")).json()
+            first = dels[0] if dels else {}
+            check("실패해도 이벤트를 잃지 않음",
+                  first.get("status") == "failed" and first.get("attempt") == 1, str(first))
+            check("실패 사유가 남음", bool(first.get("error")), str(first))
+            check("재시도 시각이 잡힘", bool(first.get("next_attempt_at")), str(first))
+
+            # 최대 시도를 넘기면 만료로 끝난다(무한 재시도로 쌓이지 않는다)
+            for _ in range(4):
+                async with sessionmaker()() as odb:
+                    from sqlalchemy import update as _upd
+
+                    from aivision_server.models import OutboundDelivery as _D
+
+                    await odb.execute(_upd(_D).values(next_attempt_at=None))
+                    await odb.commit()
+                # next_attempt_at 을 지금으로 되돌려 즉시 재시도되게 한다
+                async with sessionmaker()() as odb:
+                    from datetime import datetime as _dt, timezone as _tz
+
+                    from sqlalchemy import update as _upd
+
+                    from aivision_server.models import OutboundDelivery as _D
+
+                    await odb.execute(_upd(_D).where(_D.status == "failed")
+                                      .values(next_attempt_at=_dt.now(_tz.utc)))
+                    await odb.commit()
+                await c.post("/api/outbound/drain")
+            dels = (await c.get("/api/outbound/deliveries")).json()
+            check("최대 시도 초과 시 만료",
+                  dels and dels[0]["status"] == "expired", str(dels[:1]))
+
+            # 대상을 지우면 대기분도 함께 정리된다(FK CASCADE)
+            check("대상 삭제 204",
+                  (await c.delete(f"/api/outbound/targets/{target_id}")).status_code == 204)
+            dels = (await c.get("/api/outbound/deliveries", params={"target_id": target_id})).json()
+            check("대상 삭제 시 이력도 정리", dels == [], str(dels[:1]))
+
             # ── 통계 · CSV · 원문 로그 ──────────────────────────────────
             for bucket in ("hourly", "daily", "weekly", "monthly"):
                 r = await c.get(f"/api/stats?bucket={bucket}")

@@ -13,6 +13,10 @@ import type {
   BindingInput,
   BindingTestResult,
   EventPage,
+  OutboundDelivery,
+  OutboundTarget,
+  OutboundTargetInput,
+  OutboundTestResult,
   SafetyEvent,
   Solution,
   Stats,
@@ -117,6 +121,28 @@ export const api = {
   saveSettings: (body: Partial<AppSettings>) =>
     request<AppSettings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
   system: () => request<SystemStatus>("/api/system"),
+
+  // ── 아웃바운드 ────────────────────────────────────────────────────
+  outboundTargets: () => request<OutboundTarget[]>("/api/outbound/targets"),
+  createOutboundTarget: (body: OutboundTargetInput) =>
+    request<OutboundTarget>("/api/outbound/targets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  patchOutboundTarget: (id: number, body: Partial<OutboundTargetInput>) =>
+    request<OutboundTarget>(`/api/outbound/targets/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteOutboundTarget: (id: number) =>
+    request<void>(`/api/outbound/targets/${id}`, { method: "DELETE" }),
+  testOutboundTarget: (id: number) =>
+    request<OutboundTestResult>(`/api/outbound/targets/${id}/test`, { method: "POST" }),
+  outboundDeliveries: (targetId?: number) =>
+    request<OutboundDelivery[]>(`/api/outbound/deliveries${qs({ target_id: targetId })}`),
+  outboundFields: () => request<string[]>("/api/outbound/fields"),
+  outboundDrain: () =>
+    request<{ handled: number; pending: number }>("/api/outbound/drain", { method: "POST" }),
   purgeMqttLog: (days = 0) =>
     request<{ deleted: number; kept_days: number }>(
       `/api/system/mqtt-log/purge${qs({ days })}`,

@@ -3,7 +3,9 @@
  * "어떤 토픽·페이로드를 어떤 탐지 항목의 이벤트로 볼지"를 여기서 정한다.
  * 코드 수정 없이 새 소스를 받아들일 수 있어야 한다는 요구가 이 화면으로 구현된다.
  *
- * 우리 토픽 규약은 특권이 아니다. 협력사가 정한 임의 토픽도 여기 등록하면 똑같이 동작한다.
+ * 어떤 토픽도 특권을 갖지 않는다. 협력사가 정한 임의 토픽도, 우리가 만든 모듈이 쓰는 토픽도
+ * 여기 등록해야 동작한다. '프리셋' 은 흔한 모양을 폼에 채워 주는 입력 도우미일 뿐이고
+ * 만들어진 바인딩은 손으로 만든 것과 같은 데이터다.
  *
  * '시험' 이 이 화면의 핵심이다. MQTT 로그에서 본 메시지를 그대로 붙여 넣으면 어느 바인딩이
  * 걸리고 왜 안 걸리는지 바로 보여 준다. 이게 없으면 표현식을 손으로 맞춰 보며 추측해야 한다.
@@ -58,6 +60,90 @@ const EMPTY: BindingInput = {
   boxes_format: "xyxy_norm",
 };
 
+/** 프리셋 — 흔한 소스의 바인딩을 폼에 채워 준다.
+ *
+ * 서버는 프리셋을 모른다. 여기서 만들어진 바인딩은 손으로 만든 것과 완전히 같은 데이터이고
+ * 지우면 없어진다. 어떤 토픽도 특권을 갖지 않는다는 원칙을 깨지 않으면서, 흔한 설정을
+ * 매번 손으로 채우는 수고만 없앤다.
+ */
+const PRESETS: { id: string; label: string; hint: string; patch: Partial<BindingInput> }[] = [
+  {
+    id: "our-module",
+    label: "우리 모듈 (탐지)",
+    hint: "우리가 만든 모듈이 발행하는 모양. 카메라·항목을 페이로드에서 읽습니다.",
+    patch: {
+      name: "우리 모듈 탐지",
+      topic_pattern: "aivision/detect/#",
+      payload_profile: "raw",
+      camera_from: "payload",
+      camera_expr: "$.camera_id",
+      item_from: "payload",
+      item_expr: "$.item",
+      state_expr: "$.state",
+      state_active: "active",
+      state_inactive: "inactive",
+      confidence_expr: "$.confidence",
+      ts_expr: "$.ts",
+      boxes_expr: "$.boxes",
+      boxes_format: "xyxy_norm",
+      live_only: false,
+    },
+  },
+  {
+    id: "our-module-live",
+    label: "우리 모듈 (라이브 박스)",
+    hint: "영상 위 오버레이 전용. 이벤트로 쌓지 않고 화면으로만 흘립니다.",
+    patch: {
+      name: "우리 모듈 라이브 박스",
+      topic_pattern: "aivision/live/+",
+      payload_profile: "raw",
+      camera_from: "topic_segment",
+      camera_expr: "$topic[2]",
+      item_from: "fixed",
+      state_expr: "",
+      boxes_expr: "$.boxes",
+      boxes_format: "xyxy_norm",
+      live_only: true,
+    },
+  },
+  {
+    id: "onvif-relay",
+    label: "ONVIF 릴레이 (한화비전 등)",
+    hint: "카메라가 ONVIF 양식을 MQTT 본문에 싣는 경우. 발생·해제가 따로 옵니다.",
+    patch: {
+      name: "ONVIF 릴레이",
+      topic_pattern: "+/onvif-ej/#",
+      payload_profile: "onvif",
+      camera_from: "topic_mac",
+      camera_expr: "",
+      item_from: "fixed",
+      state_expr: "$.Data.LogicalState",
+      state_active: "active",
+      state_inactive: "inactive",
+      ts_expr: "$.UtcTime",
+      boxes_expr: "",
+      live_only: false,
+    },
+  },
+  {
+    id: "simple-alarm",
+    label: "단순 알람 (페이로드 없음)",
+    hint: "메시지가 오는 것 자체가 발생인 경우. 토픽 꼬리표만 고쳐 쓰세요.",
+    patch: {
+      name: "단순 알람",
+      topic_pattern: "+/fireAlarm",
+      payload_profile: "raw",
+      camera_from: "topic_mac",
+      camera_expr: "",
+      item_from: "fixed",
+      state_expr: "",
+      confidence_expr: "",
+      boxes_expr: "",
+      live_only: false,
+    },
+  },
+];
+
 const CAMERA_FROM_LABEL: Record<BindingInput["camera_from"], string> = {
   topic_mac: "토픽의 MAC 주소",
   topic_segment: "토픽 조각",
@@ -105,7 +191,7 @@ export function BindingAdmin() {
     <>
       <Section
         title="인바운드 바인딩"
-        desc="들어온 메시지를 어떤 이벤트로 볼지 정합니다. 우리 토픽 규약이 아니어도 등록하면 동작합니다."
+        desc="들어온 메시지를 어떤 이벤트로 볼지 정합니다. 어떤 토픽이든 등록하면 동작합니다."
         actions={
           <>
             <Button size="sm" onClick={() => setTestOpen(true)}>
@@ -273,6 +359,36 @@ function BindingForm({ binding, onClose }: { binding: Binding | null; onClose: (
       }
     >
       <div className="grid gap-5">
+        {!binding && (
+          <div className="rounded-lg border border-hairline bg-surface-soft px-4 py-3">
+            <div className="mb-[3px] text-[11.5px] font-medium text-muted">프리셋</div>
+            <p className="mb-[9px] text-[11px] text-muted-soft">
+              흔한 모양을 아래 칸에 채워 줍니다. 채운 뒤 자유롭게 고칠 수 있고, 만들어진
+              바인딩은 손으로 만든 것과 똑같습니다.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  title={preset.hint}
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      ...preset.patch,
+                      // 탐지 항목은 프리셋이 정할 수 없다. 현장에서 만든 것 중에 골라야 한다.
+                      solution_code: f.solution_code ?? solutions[0]?.code ?? null,
+                    }))
+                  }
+                  className="rounded-full border border-hairline bg-canvas px-[13px] py-[5px] text-[12px] text-body transition-colors hover:border-primary/50 hover:text-primary-active"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-4 sm:grid-cols-[1.5fr_.7fr]">
           <Field label="이름" hint="이벤트의 '판정 주체'로 기록됩니다.">
             <Input

@@ -33,13 +33,15 @@ import { api, ApiError } from "../lib/api";
 import { fmtAgo } from "../lib/format";
 import { useCameras, useSettings, useSystem } from "../lib/hooks";
 import { BindingAdmin } from "./BindingAdmin";
+import { OutboundAdmin } from "./OutboundAdmin";
 import type { Camera, CameraInput, CameraTestResult } from "../lib/types";
 
-type Tab = "cameras" | "bindings" | "settings" | "system";
+type Tab = "cameras" | "bindings" | "outbound" | "settings" | "system";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "cameras", label: "카메라 등록" },
   { id: "bindings", label: "인바운드 바인딩" },
+  { id: "outbound", label: "아웃바운드" },
   { id: "settings", label: "운영 설정" },
   { id: "system", label: "시스템 상태" },
 ];
@@ -70,6 +72,7 @@ export function Admin() {
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === "cameras" && <CameraAdmin />}
       {tab === "bindings" && <BindingAdmin />}
+      {tab === "outbound" && <OutboundAdmin />}
       {tab === "settings" && <SettingsAdmin />}
       {tab === "system" && <SystemAdmin />}
     </>

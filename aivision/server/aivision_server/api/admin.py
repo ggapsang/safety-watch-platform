@@ -83,7 +83,10 @@ async def system_status(session: AsyncSession = Depends(get_session)) -> dict:
     recent = int((await session.execute(
         select(func.count(MqttMessage.id)).where(MqttMessage.ts >= since))).scalar() or 0)
     media = await media_backend().health()
+    from ..services import outbound as outbound_service
+
     return {
+        "outbound": {"pending": await outbound_service.pending_count()},
         "detection_sources": registry.statuses(),
         "streams": manager.statuses(),
         "media": {"name": media.name, "available": media.available,

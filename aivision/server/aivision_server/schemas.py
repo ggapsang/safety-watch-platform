@@ -325,6 +325,56 @@ class EventPage(BaseModel):
     offset: int
 
 
+# ────────────────────────────────────────────────────────────── 아웃바운드
+
+class OutboundTargetBase(BaseModel):
+    """이벤트를 밖으로 내보낼 대상. 인바운드 바인딩의 대칭이다."""
+
+    name: str = Field(min_length=1, max_length=80)
+    enabled: bool = True
+    kind: str = "mqtt"                    # 지금은 mqtt 만. 웹훅·알림·PLC 는 나중에 붙는다.
+    # 비우면 전부 보낸다.
+    solution_codes: list[str] = Field(default_factory=list)
+    camera_ids: list[int] = Field(default_factory=list)
+    # kind 별 설정. mqtt: {"topic_template": "...", "qos": 0, "retain": false}
+    config: dict = Field(default_factory=dict)
+    payload_template: str = ""
+    max_attempts: int = 5
+    retry_backoff_sec: float = 5.0
+
+
+class OutboundTargetCreate(OutboundTargetBase):
+    pass
+
+
+class OutboundTargetPatch(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    kind: str | None = None
+    solution_codes: list[str] | None = None
+    camera_ids: list[int] | None = None
+    config: dict | None = None
+    payload_template: str | None = None
+    max_attempts: int | None = None
+    retry_backoff_sec: float | None = None
+
+
+class OutboundTargetOut(OutboundTargetBase):
+    id: int
+    last_sent_at: datetime | None = None
+    sent_count: int = 0
+    fail_count: int = 0
+    last_error: str = ""
+
+
+class OutboundTestResult(BaseModel):
+    ok: bool
+    event: str
+    topic: str
+    payload: str
+    detail: str = ""
+
+
 # ────────────────────────────────────────────────────────────── 통계
 
 class SeriesPoint(BaseModel):

@@ -167,6 +167,50 @@ export interface BindingTestResult {
   boxes: number;
 }
 
+/** 아웃바운드 대상 — 인바운드 바인딩의 대칭. */
+export interface OutboundTarget {
+  id: number;
+  name: string;
+  enabled: boolean;
+  kind: string;
+  solution_codes: string[];
+  camera_ids: number[];
+  config: Record<string, unknown>;
+  payload_template: string;
+  max_attempts: number;
+  retry_backoff_sec: number;
+  last_sent_at: string | null;
+  sent_count: number;
+  fail_count: number;
+  last_error: string;
+}
+
+export type OutboundTargetInput = Omit<
+  OutboundTarget,
+  "id" | "last_sent_at" | "sent_count" | "fail_count" | "last_error"
+>;
+
+export interface OutboundTestResult {
+  ok: boolean;
+  event: string;
+  topic: string;
+  payload: string;
+  detail: string;
+}
+
+export interface OutboundDelivery {
+  id: number;
+  target_id: number;
+  event: string | null;
+  status: "pending" | "sent" | "failed" | "expired";
+  attempt: number;
+  topic: string;
+  error: string;
+  created_at: string;
+  sent_at: string | null;
+  next_attempt_at: string | null;
+}
+
 export interface AppSettings {
   mqtt_ws_url: string;
   mqtt_log_retention_days: number;

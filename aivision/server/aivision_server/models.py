@@ -120,9 +120,10 @@ class InboundBinding(Base):
     (한화비전은 ONVIF 양식을 MQTT 본문에 싣고, 협력사는 각자 마음대로 보낸다)
     '무엇이 걸리는가(match)' 와 '어떻게 뽑는가(extract)' 를 데이터로 들고 있는다.
 
-    토픽 네임스페이스는 규약일 뿐 특권이 아니다. 어드민이 토픽만 알면 어떤 토픽이든
-    등록해 이벤트로 만들 수 있어야 한다. 우리 규약(aivision/...)은 기본 바인딩을 미리
-    넣어 두는 편의일 뿐이다.
+    어떤 토픽도 특권을 갖지 않는다. 어드민이 토픽만 알면 무엇이든 등록해 이벤트로 만들 수
+    있어야 한다. 우리가 만든 모듈이 쓰는 토픽 모양(aivision/...)도 예외가 아니다 —
+    화면의 '프리셋' 은 그 모양에 맞는 바인딩을 미리 채워 주는 입력 도우미일 뿐이고,
+    만들어진 결과는 다른 바인딩과 완전히 같은 데이터다. 지우면 없어진다.
 
     표현식 문법은 mqtt/mapping.py 참조.  $.a.b / $topic[2] / $mac / 리터럴
     """
@@ -316,6 +317,76 @@ class Recording(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     note: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OutboundTarget(Base):
+    """아웃바운드 대상 — 인바운드 바인딩의 대칭.
+
+    인바운드가 '밖의 아무 모양 -> 우리 정규형' 이면, 여기는 '우리 이벤트 -> 상대가 원하는 모양'
+    이다. 상대를 우리 형식에 맞추라고 할 수 없으므로 템플릿을 데이터로 들고 있는다.
+
+    지금 구현은 kind="mqtt" 뿐이다. 웹훅·알림·PLC 는 kind 를 늘리고 sender 함수를 추가하면
+    붙는다 — 코어는 고치지 않는다(매니페스토 3번).
+    """
+
+    __tablename__ = "outbound_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(80))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    kind: Mapped[str] = mapped_column(String(16), default="mqtt")
+
+    # ── 어떤 이벤트를 보낼지. 비우면 전부. ───────────────────────────
+    solution_codes: Mapped[list | None] = mapped_column(JSON)
+    camera_ids: Mapped[list | None] = mapped_column(JSON)
+
+    # ── kind 별 설정. mqtt: {"topic_template":..., "qos":0, "retain":false} ──
+    config: Mapped[dict | None] = mapped_column(JSON)
+    # 상대가 원하는 페이로드 모양. 중괄호 치환({event.code} 등).
+    payload_template: Mapped[str] = mapped_column(Text, default="")
+
+    # ── 재시도 정책 ─────────────────────────────────────────────────
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5)
+    retry_backoff_sec: Mapped[float] = mapped_column(Float, default=5.0)
+
+    # ── 진단 ────────────────────────────────────────────────────────
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(String(300), default="")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OutboundDelivery(Base):
+    """발송 대기·이력 (outbox 패턴).
+
+    메모리 큐가 아니라 테이블인 이유가 둘이다.
+      1. 수신 측이 죽어 있어도 이벤트를 잃지 않는다.
+      2. **서버를 재시작해도 대기분이 살아남는다.** 메모리 큐면 통째로 사라진다.
+
+    '왜 안 갔나' 를 어드민이 볼 수 있어야 하므로 시도 횟수와 실패 사유를 남긴다.
+    """
+
+    __tablename__ = "outbound_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("outbound_targets.id", ondelete="CASCADE"),
+                                           index=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"),
+                                                 index=True)
+    # pending: 아직 안 보냄 / sent: 성공 / failed: 실패했고 재시도 예정 / expired: 최대 시도 초과
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    # 발송 시점에 만들어 둔다. 이벤트가 지워져도 무엇을 보내려 했는지 남는다.
+    topic: Mapped[str] = mapped_column(String(400), default="")
+    payload: Mapped[str] = mapped_column(Text, default="")
+
+    error: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class MqttMessage(Base):

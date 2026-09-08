@@ -1,11 +1,12 @@
 """FastAPI 진입점.
 
 기동 순서
-  1. 테이블 생성 + 시드(솔루션·전역 탐지규칙)
-  2. 등록된 카메라의 RTSP 워커 기동
-  3. 탐지 소스(MQTT/ONVIF) 기동
-  4. 감시 태스크(카메라 상태·로그 정리) 기동
-  5. 빌드된 SPA 서빙
+  1. 미디어 백엔드 상태 확인
+  2. 스키마 마이그레이션(upgrade head)
+  3. 미디어 경로 등록 + 카메라 프레임 워커 기동, 녹화 정책 반영
+  4. 인바운드 탐지 소스 기동 (MQTT 구독 -> 바인딩)
+  5. 감시 태스크(카메라 상태·로그 정리) + 아웃바운드 워커 기동
+  6. 빌드된 SPA 서빙
 
 스키마는 Alembic 마이그레이션으로 관리한다. 기동할 때 자동으로 `upgrade head` 를 돌린다 —
 사람이 잊어버려서 스키마가 어긋난 채 서버가 뜨는 일을 막기 위해서다.
@@ -21,14 +22,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .api import (admin, bindings, cameras, events, ingest, modules, recordings,
-                  stats, stream, ws)
+from .api import (admin, bindings, cameras, events, ingest, modules, outbound,
+                  recordings, stats, stream, ws)
 from .config import get_settings
 from .db import dispose, sessionmaker
 from .media import backend as media_backend, dispose as media_dispose
 from .detection.registry import registry
 from .seed import seed
 from .services import monitor
+from .services import outbound as outbound_service
 from .services import recording as recording_service
 from .streaming.manager import manager
 
@@ -66,12 +68,15 @@ async def lifespan(app: FastAPI):
 
     await registry.start_all()
     monitor_task = monitor.start()
+    # 아웃바운드 워커. 재시작 전에 남아 있던 outbox 대기분을 이어서 보낸다.
+    outbound_service.start()
 
     try:
         yield
     finally:
         log.info("종료 중…")
         await monitor.stop(monitor_task)
+        await outbound_service.stop()
         await registry.stop_all()
         await manager.shutdown()
         await media_dispose()
@@ -112,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(recordings.router)
     app.include_router(modules.router)
     app.include_router(ingest.router)
+    app.include_router(outbound.router)
     app.include_router(bindings.router)
     app.include_router(admin.router)
     app.include_router(ws.router)
