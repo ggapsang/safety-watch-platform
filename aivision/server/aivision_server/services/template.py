@@ -51,8 +51,12 @@ def context_of(event: Event) -> dict[str, Any]:
     }
 
 
-def render(template: str, ctx: dict[str, Any]) -> str:
-    """중괄호 치환. 모르는 이름은 빈 문자열."""
+def render(template: str, ctx: dict[str, Any], escape: bool = False) -> str:
+    """중괄호 치환. 모르는 이름은 빈 문자열.
+
+    escape=True 면 값을 JSON 문자열 규칙으로 이스케이프해 넣는다. 값 안의 따옴표나
+    줄바꿈이 템플릿의 JSON 구조를 깨뜨리는 것을 막는다(카메라 이름에 " 가 들어 있는 경우).
+    """
     if not template:
         return ""
 
@@ -62,7 +66,11 @@ def render(template: str, ctx: dict[str, Any]) -> str:
             log.debug("템플릿에 없는 이름: {%s}", key)
             return ""
         value = ctx[key]
-        return "" if value is None else str(value)
+        if value is None:
+            return ""
+        text = str(value)
+        # json.dumps 로 감싼 뒤 양쪽 따옴표만 떼면 이스케이프 규칙을 그대로 얻는다.
+        return json.dumps(text, ensure_ascii=False)[1:-1] if escape else text
 
     return _PLACEHOLDER.sub(sub, template)
 
@@ -70,17 +78,28 @@ def render(template: str, ctx: dict[str, Any]) -> str:
 def render_json(template: str, ctx: dict[str, Any]) -> str:
     """페이로드용. 치환 결과가 JSON 으로 파싱되는지 확인해 준다.
 
-    파싱이 안 되더라도 그대로 보낸다 — 상대가 JSON 이 아닌 형식을 원할 수도 있다.
+    JSON 처럼 생긴 템플릿이 값 때문에 깨졌을 때는 값을 이스케이프해 한 번 더 시도한다.
+    카메라 이름에 따옴표가 하나 들어 있다는 이유로 모든 발송이 깨진 JSON 이 되어서는 안 된다.
+    그래도 파싱되지 않으면 그대로 보낸다 — 상대가 JSON 이 아닌 형식을 원할 수도 있다.
     다만 로그로 알려서 어드민이 오타를 눈치챌 수 있게 한다.
     """
     out = render(template, ctx)
-    if out.lstrip().startswith(("{", "[")):
+    if not out.lstrip().startswith(("{", "[")):
+        return out
+    try:
+        json.loads(out)
+        return out
+    except ValueError as exc:
+        escaped = render(template, ctx, escape=True)
         try:
-            json.loads(out)
-        except ValueError as exc:
+            json.loads(escaped)
+        except ValueError:
             log.warning("아웃바운드 페이로드가 JSON 으로 파싱되지 않습니다(%s) — 그대로 보냅니다",
                         exc)
-    return out
+            return out
+        log.info("아웃바운드 페이로드의 값을 이스케이프했습니다 (원본은 JSON 이 아니었음: %s)",
+                 exc)
+        return escaped
 
 
 # 화면에서 안내로 보여 줄 목록. 여기와 context_of 가 어긋나지 않게 한곳에서 만든다.

@@ -162,6 +162,10 @@ class InboundBinding(Base):
     state_inactive: Mapped[str] = mapped_column(String(64), default="inactive")
 
     # ── 부가 정보 ───────────────────────────────────────────────────
+    # 무엇이 판정했나. 페이로드에 모듈 식별자가 실려 오면 여기로 뽑는다. 비워도 된다 —
+    # 카메라 엣지처럼 자기를 밝히지 않는 소스가 많다. 이것을 바인딩 이름으로 대신 채우면
+    # '어느 규칙이 걸렸나'(binding_id)와 '무엇이 판정했나'가 뒤섞인다.
+    module_expr: Mapped[str] = mapped_column(String(200), default="")
     confidence_expr: Mapped[str] = mapped_column(String(200), default="")
     ts_expr: Mapped[str] = mapped_column(String(200), default="")
     boxes_expr: Mapped[str] = mapped_column(String(200), default="")

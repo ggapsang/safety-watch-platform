@@ -83,6 +83,7 @@ export interface SafetyEvent {
   sol: string;
   type: string;
   source: string;
+  module: string;
   confidence: number | null;
   has_snapshot: boolean;
   has_clip: boolean;
@@ -145,6 +146,7 @@ export interface Binding {
   state_active: string;
   state_inactive: string;
 
+  module_expr: string;
   confidence_expr: string;
   ts_expr: string;
   boxes_expr: string;

@@ -103,7 +103,8 @@ async def ingest_signal(session: AsyncSession, signal: DetectionSignal) -> Event
     await session.commit()
     await session.refresh(event)
     log.info("이벤트 발생 %s | %s / %s  <- %s(%s)", event.code, camera.location,
-             solution.short_name, signal.module_id or "?", signal.source)
+             solution.short_name,
+             signal.module_id or f"바인딩#{signal.binding_id}", signal.source)
 
     # 사고 영상은 코어 자산이다. 뒤쪽 여유분이 녹화될 때까지 기다렸다 잘라 온다.
     # 실패해도 이벤트는 이미 살아 있다 — 클립은 참고 자료다.
@@ -151,6 +152,7 @@ def to_dto(event: Event, *, has_clip: bool = False) -> EventOut:
         sol=event.solution_code,
         type=event.event_type,
         source=event.source,
+        module=event.module_id or "",
         confidence=event.confidence,
         has_snapshot=bool(event.snapshot_path),
         has_clip=has_clip,

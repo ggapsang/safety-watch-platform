@@ -8,6 +8,14 @@ import { fmtDateTime } from "../lib/format";
 import type { SafetyEvent } from "../lib/types";
 import { Button, Modal } from "./ui";
 
+/** source 는 '어느 통로로 들어왔나' 다. 무엇이 판정했는지는 module 이 말한다. */
+const SOURCE_LABEL: Record<string, string> = {
+  mqtt: "MQTT (브로커)",
+  http: "HTTP 밀어넣기",
+  internal: "서버 내장",
+  manual: "수동 등록",
+};
+
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-hairline/60 py-[10px] last:border-b-0">
@@ -82,9 +90,12 @@ export function EventDetail({
       <Row label="발생 시간" value={<span className="tnum">{fmtDateTime(event.ts)}</span>} />
       <Row label="카메라" value={`${event.cam_name} · ${event.cam_location}`} />
       <Row label="이벤트" value={event.type} />
+      <Row label="수신 경로" value={SOURCE_LABEL[event.source] ?? event.source} />
       <Row
-        label="탐지 소스"
-        value={event.source === "mqtt" ? "카메라 엣지 (ONVIF/MQTT)" : event.source}
+        label="판정 주체"
+        value={
+          event.module || <span className="text-muted-soft">밝히지 않음</span>
+        }
       />
       <Row
         label="영상 클립"

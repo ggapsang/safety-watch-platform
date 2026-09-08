@@ -161,6 +161,7 @@ class BindingBase(BaseModel):
     state_active: str = "active"
     state_inactive: str = "inactive"
 
+    module_expr: str = ""                   # 무엇이 판정했나. 예 "$.module_id". 비워도 됨
     confidence_expr: str = ""
     ts_expr: str = ""
     boxes_expr: str = ""
@@ -189,6 +190,7 @@ class BindingPatch(BaseModel):
     state_expr: str | None = None
     state_active: str | None = None
     state_inactive: str | None = None
+    module_expr: str | None = None
     confidence_expr: str | None = None
     ts_expr: str | None = None
     boxes_expr: str | None = None
@@ -312,6 +314,7 @@ class EventOut(BaseModel):
     sol: str
     type: str
     source: str
+    module: str = ""              # 무엇이 판정했나 (바인딩이 뽑아 준 경우에만)
     confidence: float | None
     has_snapshot: bool
     has_clip: bool = False

@@ -54,6 +54,7 @@ const EMPTY: BindingInput = {
   state_expr: "",
   state_active: "active",
   state_inactive: "inactive",
+  module_expr: "",
   confidence_expr: "",
   ts_expr: "",
   boxes_expr: "",
@@ -82,6 +83,7 @@ const PRESETS: { id: string; label: string; hint: string; patch: Partial<Binding
       state_expr: "$.state",
       state_active: "active",
       state_inactive: "inactive",
+      module_expr: "$.module_id",
       confidence_expr: "$.confidence",
       ts_expr: "$.ts",
       boxes_expr: "$.boxes",
@@ -319,7 +321,12 @@ function BindingForm({ binding, onClose }: { binding: Binding | null; onClose: (
     if (binding) {
       const { id: _id, last_matched_at: _l, match_count: _m, ...rest } = binding;
       setForm(rest);
-      setAdvanced(!!(binding.confidence_expr || binding.boxes_expr || binding.ts_expr));
+      setAdvanced(
+        !!(binding.confidence_expr ||
+          binding.boxes_expr ||
+          binding.ts_expr ||
+          binding.module_expr),
+      );
     } else {
       setForm({ ...EMPTY, solution_code: solutions[0]?.code ?? null });
       setAdvanced(false);
@@ -574,10 +581,21 @@ function BindingForm({ binding, onClose }: { binding: Binding | null; onClose: (
             onClick={() => setAdvanced((v) => !v)}
             className="text-[12.5px] font-medium text-primary hover:text-primary-active"
           >
-            {advanced ? "부가 정보 접기" : "부가 정보 (신뢰도 · 시각 · 바운딩 박스)"}
+            {advanced ? "부가 정보 접기" : "부가 정보 (판정 주체 · 신뢰도 · 시각 · 바운딩 박스)"}
           </button>
           {advanced && (
             <div className="mt-3 grid gap-4 rounded-lg border border-hairline bg-surface-soft p-4">
+              <Field
+                label="판정 주체 표현식"
+                hint="무엇이 판정했는지 페이로드에 실려 오면 뽑습니다. 비워도 됩니다."
+              >
+                <Input
+                  value={form.module_expr}
+                  onChange={(e) => set("module_expr", e.target.value)}
+                  className="font-mono text-[12.5px]"
+                  placeholder="$.module_id"
+                />
+              </Field>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="신뢰도 표현식" hint="0~100 으로 오면 자동으로 0~1 로 바꿉니다.">
                   <Input

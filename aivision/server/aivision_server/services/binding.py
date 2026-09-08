@@ -62,6 +62,7 @@ class _Cached:
     state_expr: str
     state_active: str
     state_inactive: str
+    module_expr: str
     confidence_expr: str
     ts_expr: str
     boxes_expr: str
@@ -92,6 +93,7 @@ class BindingEngine:
                 item_from=b.item_from, item_expr=b.item_expr, solution_code=b.solution_code,
                 state_expr=b.state_expr, state_active=b.state_active,
                 state_inactive=b.state_inactive,
+                module_expr=b.module_expr,
                 confidence_expr=b.confidence_expr, ts_expr=b.ts_expr,
                 boxes_expr=b.boxes_expr, boxes_format=b.boxes_format,
             ) for b in rows]
@@ -166,6 +168,12 @@ class BindingEngine:
         confidence = mapping.to_float(
             mapping.evaluate(b.confidence_expr, topic=topic, payload=flat,
                              profile=b.payload_profile)) if b.confidence_expr else None
+        module_id = ""
+        if b.module_expr:
+            value = mapping.evaluate(b.module_expr, topic=topic, payload=flat,
+                                     profile=b.payload_profile)
+            module_id = "" if value is None else str(value).strip()[:64]
+
         boxes: list[Box] = []
         if b.boxes_expr:
             raw = mapping.evaluate(b.boxes_expr, topic=topic, payload=flat,
@@ -178,7 +186,7 @@ class BindingEngine:
             state=state,
             ts=ts,
             source="mqtt" if b.transport == "mqtt" else b.transport,
-            module_id=b.name,
+            module_id=module_id,
             binding_id=b.id,
             live_only=b.live_only,
             confidence=confidence,

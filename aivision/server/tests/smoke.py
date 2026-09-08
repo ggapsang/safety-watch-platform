@@ -265,6 +265,29 @@ async def main() -> int:
                   r.status_code == 200 and r.json()["matched"] == 0 and r.json()["detail"],
                   r.text)
 
+            # 판정 주체는 바인딩 이름이 아니라 페이로드에서 뽑은 값이어야 한다.
+            # (바인딩 이름을 넣으면 '어느 규칙이 걸렸나' 와 '무엇이 판정했나' 가 뒤섞인다)
+            async with sessionmaker()() as sdb:
+                # 새 항목을 쓴다. 기존 항목은 앞선 테스트에서 이미 이벤트가 나서
+                # 중복 억제 창(20초)에 걸린다.
+                sdb.add(Solution(code="ITEM-D", name="시험 항목 D", short_name="D",
+                                 event_type="시험 D"))
+                await sdb.commit()
+            r = await c.post("/api/bindings", json={
+                "name": "판정주체 확인", "transport": "http", "topic_pattern": "probe/module",
+                "camera_from": "fixed", "camera_id": cid,
+                "item_from": "fixed", "solution_code": "ITEM-D",
+                "module_expr": "$.module_id", "state_expr": ""})
+            check("판정 주체 표현식을 받는 바인딩 생성", r.status_code == 201, r.text)
+            mod_binding = r.json()["id"]
+            await c.post("/api/ingest", json={
+                "topic": "probe/module", "payload": {"module_id": "yolo-server"}})
+            evs = await events()
+            picked = [e for e in evs["items"] if e["module"] == "yolo-server"]
+            check("이벤트에 판정 주체가 남는다", len(picked) == 1,
+                  str([(e["id"], e.get("module")) for e in evs["items"]]))
+            await c.delete(f"/api/bindings/{mod_binding}")
+
             # MQTT 바인딩은 HTTP 로 들어온 것에 걸리지 않아야 한다(전송별 격리)
             r = await c.post("/api/ingest", json={
                 "topic": "E4:30:22:F3:31:AA/fireAlarm", "payload": {}})
@@ -278,6 +301,20 @@ async def main() -> int:
             fields = (await c.get("/api/outbound/fields")).json()
             check("템플릿 필드 목록 제공", "event.code" in fields and "boxes_json" in fields,
                   str(fields))
+
+            # 값 안의 따옴표 하나로 모든 발송이 깨진 JSON 이 되어서는 안 된다.
+            from aivision_server.services import template as _tpl
+
+            ctx = {"camera.name": '1층 "정문" 카메라', "event.code": "EVT-1"}
+            out = _tpl.render_json('{"cam":"{camera.name}","e":"{event.code}"}', ctx)
+            import json as _json
+
+            try:
+                parsed = _json.loads(out)
+            except ValueError:
+                parsed = None
+            check("값에 따옴표가 있어도 페이로드가 JSON 으로 유지됨",
+                  parsed is not None and parsed["cam"] == '1층 "정문" 카메라', out)
 
             r = await c.post("/api/outbound/targets", json={
                 "name": "상위 관제", "kind": "mqtt",
@@ -367,7 +404,10 @@ async def main() -> int:
                 r = await c.get(f"/api/stats?bucket={bucket}")
                 check(f"통계 {bucket}", r.status_code == 200 and len(r.json()["series"]) > 0, r.text)
             st = (await c.get("/api/stats?bucket=daily")).json()
-            check("통계 항목별 집계", len(st["by_solution"]) == 3, str(st["by_solution"]))
+            codes = {row["code"] for row in st["by_solution"]}
+            check("통계 항목별 집계",
+                  codes == {"ITEM-A", "ITEM-B", "ITEM-C", "ITEM-D"},
+                  str(st["by_solution"]))
 
             s = (await c.get("/api/events/summary")).json()
             check("요약 KPI", s["cameras_total"] == 1, str(s))
