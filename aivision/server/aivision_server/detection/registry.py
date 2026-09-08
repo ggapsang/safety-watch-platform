@@ -34,7 +34,7 @@ class DetectionRegistry:
             try:
                 await source.start(_handle_signal)
             except NotImplementedError as exc:
-                # 껍데기 소스(서버 YOLO)는 기동 실패가 정상이다. 서버는 계속 뜬다.
+                # 아직 구현되지 않은 소스는 비활성으로 넘긴다. 서버는 계속 뜬다.
                 log.info("탐지 소스 '%s' 비활성: %s", source.name, exc)
             except Exception:                                   # noqa: BLE001
                 log.exception("탐지 소스 '%s' 기동 실패", source.name)
@@ -65,9 +65,9 @@ def build_registry() -> DetectionRegistry:
     reg = DetectionRegistry()
     # 브로커로 들어오는 모든 것(카메라 엣지·사이드카·원격 모듈)이 이 통로를 지난다.
     reg.add(MqttInboundSource())
-    # 서버 프로세스 안에서 도는 모듈만 별도로 등록한다. 자기 자신에게 브로커를 거칠 이유가 없다.
-    #   from .yolo_source import ServerYoloSource
-    #   reg.add(ServerYoloSource(model_path="/models/best.onnx"))
+    # 서버 프로세스 안에서 도는 모듈이 생기면 여기에 등록한다(자기 자신에게 브로커를
+    # 거칠 이유가 없다). 서버 YOLO 는 여기 두지 않는다 — 별도 컨테이너에서 모듈 계약을
+    # 그대로 쓴다: aivision/modules/yolo.
     return reg
 
 

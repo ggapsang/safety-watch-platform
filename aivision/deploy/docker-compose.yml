@@ -106,13 +106,61 @@ services:
       - "${HTTP_PORT:-11880}:8000"
     volumes:
       - media-data:/data
-      # 모델 파일은 호스트에서 넣는다(YOLO 소스 활성화 시). 지금은 비어 있어도 무방.
-      - ../models:/models:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health').read()"]
       interval: 20s
       timeout: 5s
       retries: 5
+
+  # 서버 YOLO 사이드카.
+  #
+  # 코어가 아니라 별도 컨테이너인 이유: 추론 의존성(onnxruntime · opencv)이 무겁고,
+  # 추론이 죽을 때 웹서버가 같이 죽어서는 안 되며, 모델 로딩이 서버 기동을 붙잡아서도
+  # 안 된다. 그리고 이 모듈은 5단계에서 만든 모듈 계약의 첫 사용자여야 한다 —
+  # 코어 안에 두면 계약을 우회하는 특별 통로가 생긴다(매니페스토 1번).
+  #
+  # profile 로 묶어 기본은 꺼 둔다. 모델이 없는 환경에서 켜 두면 혼란만 준다.
+  #   docker compose --profile yolo up -d --build
+  yolo:
+    profiles: ["yolo"]
+    build:
+      context: ../modules/yolo
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_started
+      mqtt:
+        condition: service_started
+      mediamtx:
+        condition: service_started
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      # 컨테이너 네트워크 안에서 붙는다. 원격 PC 에서 돌릴 때는 호스트 주소로 바꾼다.
+      PLATFORM_URL: http://server:8000
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      MODULE_ID: ${YOLO_MODULE_ID:-yolo-server}
+      MODULE_NAME: ${YOLO_MODULE_NAME:-서버 YOLO}
+      # 모델 파일 경로(컨테이너 안). 없으면 모듈이 dry-run 으로 내려앉는다.
+      MODEL_PATH: ${YOLO_MODEL_PATH:-/models/best.onnx}
+      # 모델 클래스 -> 플랫폼 탐지 항목 코드. 모델이 바뀌면 이것만 바꾼다.
+      # 예: {"no_helmet":"ITEM-001","no_vest":"ITEM-002"}  (항목을 먼저 만들어 두세요)
+      # (compose 는 기본값 안의 중괄호를 제대로 못 읽으므로 기본값은 비워 둔다.)
+      CLASS_MAP: ${YOLO_CLASS_MAP:-}
+      DEVICE: ${YOLO_DEVICE:-cpu}
+      IMGSZ: ${YOLO_IMGSZ:-640}
+      CONF_THRES: ${YOLO_CONF_THRES:-0.25}
+      IOU_THRES: ${YOLO_IOU_THRES:-0.45}
+      # 출력 텐서 해석. auto 가 틀리는 모델을 만나면 v5 / v8 / nms 로 못 박는다.
+      LAYOUT: ${YOLO_LAYOUT:-auto}
+      SAMPLE_FPS: ${YOLO_SAMPLE_FPS:-3}
+      HOLD_SEC: ${YOLO_HOLD_SEC:-3}
+      MIN_CONF: ${YOLO_MIN_CONF:-0.4}
+      DRY_RUN: ${YOLO_DRY_RUN:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # 모델 파일은 호스트에서 넣는다. 이미지에 굽지 않는다.
+      - ../models:/models:ro
 
 volumes:
   db-data:

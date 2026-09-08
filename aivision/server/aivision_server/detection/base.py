@@ -3,11 +3,13 @@
 이 프로젝트의 핵심 경계다. 판정이 **어디서 오든** 서버는 같은 모양의 신호(DetectionSignal)로
 받고, 그 뒤 처리(이벤트 적재·스냅샷·화면 통보·통계)는 완전히 동일하다.
 
-  · MqttOnvifSource   — 한화비전 카메라 엣지 앱이 ONVIF 이벤트를 MQTT 로 발행 (현재 주력)
-  · ServerYoloSource  — 서버에서 RTSP 프레임을 직접 추론 (껍데기 — 모델 확정 후 구현)
-  · (향후) 외부 판정 서비스가 HTTP 로 밀어넣는 소스도 같은 인터페이스로 붙는다.
+  · MqttInboundSource — 브로커로 들어오는 모든 것. 카메라 엣지(ONVIF), 서버 YOLO
+                        사이드카(aivision/modules/yolo), 협력사·원격 모듈이 전부 이 하나를
+                        지난다. 소스가 늘어도 코드가 늘지 않는다는 것이 요점이다.
+  · HTTP 인바운드      — api/ingest.py. 같은 바인딩 층을 쓰고 transport 만 다르다.
 
-소스를 추가할 때 건드리는 곳은 여기와 registry 뿐이다. API·DB·프론트는 그대로다.
+여기에 소스를 새로 만들어야 하는 경우는 '브로커도 HTTP 도 아닌 전송'이 생길 때뿐이다
+(시리얼, 파일 감시 등). 추론기를 붙이는 일은 소스 추가가 아니라 모듈 등록이다.
 """
 
 from __future__ import annotations

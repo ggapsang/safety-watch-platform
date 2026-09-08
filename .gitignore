@@ -30,3 +30,6 @@ refs/legacy-iseco-pc/model_files/**/*.onnx
 refs/legacy-iseco-pc/model_files/**/*.pt
 refs/legacy-iseco-pc/문서/*.pdf
 refs/legacy-iseco-pc/runtime/
+
+# 스모크 테스트가 만드는 SQLite 파일
+aivision/server/.smoke.db
