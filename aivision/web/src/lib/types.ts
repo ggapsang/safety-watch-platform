@@ -215,6 +215,10 @@ export interface OutboundDelivery {
 
 export interface AppSettings {
   mqtt_ws_url: string;
+  /** 수신 원문을 DB 에 남기는 정책. 기본은 off — 실시간 화면은 브로커 직결이라 영향 없음 */
+  mqtt_log_mode: "off" | "unmatched" | "all";
+  /** 특정 채널만 남길 때. 채우면 mode 보다 우선한다 */
+  mqtt_log_topics: string;
   mqtt_log_retention_days: number;
   snapshot_on_event: boolean;
   event_dedup_sec: number;

@@ -162,6 +162,41 @@ services:
       # 모델 파일은 호스트에서 넣는다. 이미지에 굽지 않는다.
       - ../models:/models:ro
 
+  # 카메라 ONVIF 메타데이터 -> 라이브 박스.
+  #
+  # 우리가 추론하지 않는다. 카메라 안에서 이미 돌고 있는 분석이 만든 박스를 RTSP
+  # 메타데이터 트랙에서 읽어 화면에만 그린다. **이벤트를 만들지 않는다** —
+  # 사람이 서 있는 동안 초당 여러 번 나오는 판독을 이벤트로 쌓으면 DB 가 무너진다.
+  camera-meta:
+    profiles: ["meta"]
+    build:
+      # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
+      context: ../modules
+      dockerfile: onvif_meta/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_started
+      mqtt:
+        condition: service_started
+      mediamtx:
+        condition: service_started
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PLATFORM_URL: http://server:8000
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      MODULE_ID: ${META_MODULE_ID:-camera-meta}
+      MODULE_NAME: ${META_MODULE_NAME:-카메라 메타데이터}
+      # 카메라 클래스 이름 -> 화면에 쓸 이름. 비우면 원래 이름(Human, Face 등) 그대로.
+      # 예: {"Human":"사람","Face":"얼굴","Vehicle":"차량"}
+      CLASS_MAP: ${META_CLASS_MAP:-}
+      # 표에 없는 클래스도 그릴지. 무엇이 잡히는지 보려면 켜 두는 편이 낫다.
+      KEEP_UNMAPPED: ${META_KEEP_UNMAPPED:-true}
+      # 라이브 발행 최소 간격(초). 브라우저가 감당할 수준으로 눌러 준다.
+      LIVE_MIN_INTERVAL: ${META_LIVE_MIN_INTERVAL:-0.2}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
 volumes:
   db-data:
   recordings:      # 미디어 서버의 상시 녹화 세그먼트 (회전 삭제됨)

@@ -21,6 +21,7 @@ from ..detection.registry import registry
 from ..media import backend as media_backend
 from ..models import MqttMessage, Solution
 from ..schemas import SettingsOut, SettingsPatch, SolutionOut, SolutionPatch
+from ..services import raw_log
 from ..services import settings_store as store
 from ..streaming.manager import manager
 
@@ -56,6 +57,8 @@ async def get_settings_api(session: AsyncSession = Depends(get_session)) -> Sett
     runtime = await store.get_runtime(session)
     return SettingsOut(
         mqtt_ws_url=s.mqtt_ws_url,
+        mqtt_log_mode=str(runtime.get("mqtt_log_mode", s.mqtt_log_mode)),
+        mqtt_log_topics=str(runtime.get("mqtt_log_topics", s.mqtt_log_topics) or ""),
         mqtt_log_retention_days=int(runtime.get("mqtt_log_retention_days",
                                                 s.mqtt_log_retention_days)),
         snapshot_on_event=bool(runtime.get("snapshot_on_event", s.snapshot_on_event)),
@@ -68,8 +71,16 @@ async def put_settings(body: SettingsPatch,
                        session: AsyncSession = Depends(get_session)) -> SettingsOut:
     runtime = {k: v for k, v in body.model_dump(exclude_unset=True).items()
                if v is not None}
+    mode = runtime.get("mqtt_log_mode")
+    if mode is not None and mode not in raw_log.VALID_MODES:
+        raise HTTPException(status_code=400,
+                            detail=f"mqtt_log_mode 는 {', '.join(raw_log.VALID_MODES)} "
+                                   "중 하나입니다")
     if runtime:
         await store.set_value(session, store.KEY_RUNTIME, runtime)
+    if {"mqtt_log_mode", "mqtt_log_topics"} & runtime.keys():
+        # 적재 정책은 캐시돼 있다. 저장만 하면 다음 재시작까지 반영되지 않는다.
+        await raw_log.reload()
     return await get_settings_api(session)
 
 

@@ -423,12 +423,17 @@ class SummaryOut(BaseModel):
 
 class SettingsOut(BaseModel):
     mqtt_ws_url: str                      # 브라우저가 직결 구독할 브로커 주소
+    # 수신 원문을 DB 에 남기는 정책. 기본은 남기지 않는다(off).
+    mqtt_log_mode: str                    # off | unmatched | all
+    mqtt_log_topics: str                  # 특정 채널만 남길 때. 채우면 mode 보다 우선
     mqtt_log_retention_days: int
     snapshot_on_event: bool
     event_dedup_sec: float
 
 
 class SettingsPatch(BaseModel):
+    mqtt_log_mode: str | None = None
+    mqtt_log_topics: str | None = None
     mqtt_log_retention_days: int | None = None
     snapshot_on_event: bool | None = None
     event_dedup_sec: float | None = None

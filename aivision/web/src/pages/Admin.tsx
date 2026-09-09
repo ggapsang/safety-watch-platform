@@ -24,6 +24,7 @@ import {
   Input,
   Modal,
   Section,
+  Select,
   Table,
   Tabs,
   Td,
@@ -34,7 +35,7 @@ import { fmtAgo } from "../lib/format";
 import { useCameras, useSettings, useSystem } from "../lib/hooks";
 import { BindingAdmin } from "./BindingAdmin";
 import { OutboundAdmin } from "./OutboundAdmin";
-import type { Camera, CameraInput, CameraTestResult } from "../lib/types";
+import type { AppSettings, Camera, CameraInput, CameraTestResult } from "../lib/types";
 
 type Tab = "cameras" | "bindings" | "outbound" | "settings" | "system";
 
@@ -411,9 +412,13 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
 
 /* ═══════════════════════════════════════════════════ 운영 설정 */
 
+type LogMode = AppSettings["mqtt_log_mode"];
+
 function SettingsAdmin() {
   const qc = useQueryClient();
   const { data: settings } = useSettings();
+  const [logMode, setLogMode] = useState<LogMode>("off");
+  const [logTopics, setLogTopics] = useState("");
   const [retention, setRetention] = useState(7);
   const [dedup, setDedup] = useState(20);
   const [snapshot, setSnapshot] = useState(true);
@@ -422,6 +427,8 @@ function SettingsAdmin() {
   useEffect(() => {
     if (!settings) return;
     setRetention(settings.mqtt_log_retention_days);
+    setLogMode(settings.mqtt_log_mode);
+    setLogTopics(settings.mqtt_log_topics);
     setDedup(settings.event_dedup_sec);
     setSnapshot(settings.snapshot_on_event);
   }, [settings]);
@@ -429,6 +436,8 @@ function SettingsAdmin() {
   const save = useMutation({
     mutationFn: () =>
       api.saveSettings({
+        mqtt_log_mode: logMode,
+        mqtt_log_topics: logTopics,
         mqtt_log_retention_days: retention,
         event_dedup_sec: dedup,
         snapshot_on_event: snapshot,
@@ -477,8 +486,35 @@ function SettingsAdmin() {
               />
             </Field>
             <Field
-              label="MQTT 원문 로그 보존 (일)"
-              hint="지난 메시지를 되짚어 볼 수 있는 기간입니다."
+              label="MQTT 원문 DB 적재"
+              hint="기본은 남기지 않습니다. 'MQTT 로그' 화면은 브로커에 직접 붙어 보여 주므로,
+                    꺼 두어도 실시간으로 무엇이 오는지 확인하는 데는 지장이 없습니다."
+            >
+              <Select
+                value={logMode}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                  setLogMode(e.target.value as LogMode)
+                }
+              >
+                <option value="off">남기지 않음 (기본)</option>
+                <option value="unmatched">바인딩에 안 걸린 것만</option>
+                <option value="all">전부 (짧게 켰다 끄세요)</option>
+              </Select>
+            </Field>
+            <Field
+              label="지정 채널만 남기기"
+              hint="쉼표로 구분한 토픽 패턴. 채우면 위 선택보다 우선합니다. 예: +/fireAlarm, vendorX/#"
+            >
+              <Input
+                value={logTopics}
+                onChange={(e) => setLogTopics(e.target.value)}
+                className="font-mono text-[12.5px]"
+                placeholder="비우면 위 설정을 따릅니다"
+              />
+            </Field>
+            <Field
+              label="원문 보존 (일)"
+              hint="남기기로 한 메시지를 얼마나 오래 둘지."
             >
               <Input
                 type="number"

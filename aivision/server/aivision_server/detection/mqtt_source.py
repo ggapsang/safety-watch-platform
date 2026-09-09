@@ -5,8 +5,12 @@
 
 동작
   1. 브로커에 접속해 설정된 토픽(기본 '#')을 구독한다. 끊기면 지수 백오프로 재접속한다.
-  2. 수신 원문을 mqtt_messages 에 적재한다. 바인딩에 안 걸려도 남긴다 —
-     어드민이 'MQTT 로그' 화면에서 실제 모양을 보고 바인딩을 만들 수 있어야 하기 때문이다.
+  2. 수신 원문은 **기본적으로 DB 에 남기지 않는다.** 필요할 때만 설정으로 켠다
+     (mqtt_log_mode = off | unmatched | all, mqtt_log_topics 로 특정 채널만).
+     기본을 끔으로 두어도 '모르는 토픽 찾기'는 막히지 않는다 — 'MQTT 로그' 화면은
+     브로커에 직결 구독하므로 실시간 발견은 DB 와 무관하다. 라이브 박스처럼 초당 여러 번
+     들어오는 트래픽을 기본으로 적재하면 하루 수십만 줄이 쌓이고, 정작 원문 로그를 둔
+     이유(사후에 되짚기)도 그 잡음에 묻힌다.
   3. 바인딩 엔진에 넘겨 나온 신호를 올린다.
   4. heartbeat 성 토픽은 카메라 생존 신호로만 쓴다.
 
@@ -23,8 +27,9 @@ from datetime import datetime, timezone
 
 from ..config import get_settings
 from ..db import sessionmaker
-from ..models import Camera, MqttMessage
+from ..models import Camera
 from ..mqtt import onvif
+from ..services import raw_log
 from ..services.binding import engine as binding_engine
 from .base import DetectionSource
 
@@ -52,6 +57,7 @@ class MqttInboundSource(DetectionSource):
 
     async def _start(self) -> None:
         await binding_engine.reload()
+        await raw_log.reload()
         self._stopping.clear()
         self._task = asyncio.create_task(self._loop(), name="mqtt-inbound")
 
@@ -66,10 +72,12 @@ class MqttInboundSource(DetectionSource):
 
     async def reload(self) -> None:
         await binding_engine.reload()
+        await raw_log.reload()
 
     def status(self) -> dict:
         return {**super().status(), "connected": self.connected,
                 "received": self.received, "matched": self.matched,
+                "raw_log": raw_log.status(),
                 "bindings": binding_engine.count,
                 "cameras": binding_engine.camera_count}
 
@@ -126,11 +134,11 @@ class MqttInboundSource(DetectionSource):
         # heartbeat 는 바인딩을 태우지 않는다. 생존 갱신만 하고 끝.
         if camera_id is not None and rest.lower().startswith(HEARTBEAT_SUFFIXES):
             await self._touch_camera(camera_id)
-            await self._log_message(topic, raw, camera_id, matched=False)
+            await raw_log.store_message(topic, raw, camera_id, matched=False)
             return
 
         signals = binding_engine.apply(topic, payload, transport="mqtt")
-        await self._log_message(topic, raw, camera_id, matched=bool(signals))
+        await raw_log.store_message(topic, raw, camera_id, matched=bool(signals))
 
         if not signals:
             return
@@ -152,12 +160,4 @@ class MqttInboundSource(DetectionSource):
                 return
             cam.last_seen_at = datetime.now(timezone.utc)
             cam.online = True
-            await session.commit()
-
-    async def _log_message(self, topic: str, raw: bytes, camera_id: int | None,
-                           *, matched: bool) -> None:
-        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-        async with sessionmaker()() as session:
-            session.add(MqttMessage(ts=datetime.now(timezone.utc), topic=topic[:400],
-                                    payload=text[:8000], camera_id=camera_id, matched=matched))
             await session.commit()

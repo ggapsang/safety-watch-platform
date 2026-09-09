@@ -16,10 +16,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..db import sessionmaker
-from ..models import MqttMessage
+from ..services import raw_log
 from ..services.binding import engine
 from ..services.events import ingest_signal
-from ..timeutil import now_utc
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
@@ -43,26 +42,21 @@ class IngestResult(BaseModel):
 async def ingest(body: IngestBody) -> IngestResult:
     """판정 결과를 밀어넣는다. 바인딩에 걸리면 이벤트가 된다.
 
-    안 걸려도 200 을 준다 — 보낸 쪽 잘못이 아니라 아직 규칙이 없는 것일 수 있고,
-    원문은 보관되므로 어드민이 그걸 보고 바인딩을 만들면 된다.
+    안 걸려도 200 을 준다 — 보낸 쪽 잘못이 아니라 아직 규칙이 없는 것일 수 있다.
     """
     signals = engine.apply(body.topic, body.payload, transport="http")
 
-    # 바인딩에 안 걸려도 원문은 남긴다. 모르는 소스가 와도 일단 보여야 한다.
-    async with sessionmaker()() as session:
-        import json
-
-        session.add(MqttMessage(ts=now_utc(), topic=body.topic[:400],
-                                payload=json.dumps(body.payload, ensure_ascii=False)[:8000],
-                                camera_id=None, matched=bool(signals)))
-        await session.commit()
-        if signals:
+    # 원문 적재는 정책을 따른다(기본은 남기지 않음). MQTT 인바운드와 같은 규칙이다 —
+    # 전송이 다르다고 다르게 굴면 어드민이 두 가지를 외워야 한다.
+    await raw_log.store_message(body.topic, body.payload, None, matched=bool(signals))
+    if signals:
+        async with sessionmaker()() as session:
             await engine.note_matches(session, [s.binding_id for s in signals if s.binding_id])
 
     if not signals:
         return IngestResult(accepted=True, matched=0,
                             detail="걸리는 바인딩이 없어 이벤트로 만들지 않았습니다. "
-                                   "원문은 보관했습니다 — 관리자에서 바인딩을 추가하세요.")
+                                   "관리자에서 바인딩을 추가하세요.")
 
     codes: list[str] = []
     for signal in signals:

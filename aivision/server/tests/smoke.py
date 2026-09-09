@@ -416,9 +416,42 @@ async def main() -> int:
             check("CSV BOM + 한글 헤더", r.text.startswith("﻿") and "이벤트 ID" in r.text,
                   repr(r.text[:40]))
 
+            # ── 원문 적재 정책 ─────────────────────────────────────────
+            # 기본은 남기지 않는다. 라이브 박스처럼 초당 여러 번 들어오는 트래픽을
+            # 기본으로 적재하면 하루 수십만 줄이 쌓인다. 실시간 발견은 'MQTT 로그'
+            # 화면이 브로커에 직결 구독해 처리하므로 DB 를 꺼도 막히지 않는다.
             logs = (await c.get("/api/mqtt-log")).json()
-            check("바인딩에 안 걸린 원문도 보관", any(not x["matched"] for x in logs), str(len(logs)))
+            check("기본값은 원문을 남기지 않음", logs == [], str(len(logs)))
+
+            settings = (await c.get("/api/settings")).json()
+            check("기본 적재 모드 off", settings["mqtt_log_mode"] == "off", str(settings))
+            r = await c.put("/api/settings", json={"mqtt_log_mode": "쌓아"})
+            check("알 수 없는 적재 모드 400", r.status_code == 400, r.text)
+
+            await c.put("/api/settings", json={"mqtt_log_mode": "all"})
+            await feed("vendorZ/keep/this", json.dumps({"a": 1}))
+            await feed("E4:30:22:F3:31:AA/onvif-ej/Device/tns1:Trigger/tns1:Relay/&Relay-1",
+                       json.dumps({"Data": {"SimpleItem": []}}))
+            logs = (await c.get("/api/mqtt-log")).json()
+            check("all 로 켜면 남는다", any(x["topic"] == "vendorZ/keep/this" for x in logs),
+                  str([x["topic"] for x in logs]))
             check("특수문자 토픽 보존", any("&Relay-1" in x["topic"] for x in logs))
+            check("바인딩에 안 걸린 원문도 보관", any(not x["matched"] for x in logs), str(len(logs)))
+
+            # 특정 채널만 지정하면 그것이 모드보다 우선한다
+            await c.post("/api/system/mqtt-log/purge", json={})
+            await c.put("/api/settings", json={"mqtt_log_topics": "vendorZ/#"})
+            await feed("vendorZ/only/me", json.dumps({"a": 2}))
+            await feed("someone/else", json.dumps({"a": 3}))
+            topics = {x["topic"] for x in (await c.get("/api/mqtt-log")).json()}
+            check("지정 채널만 남는다",
+                  "vendorZ/only/me" in topics and "someone/else" not in topics, str(topics))
+
+            await c.put("/api/settings", json={"mqtt_log_mode": "off", "mqtt_log_topics": ""})
+            before = len((await c.get("/api/mqtt-log")).json())
+            await feed("after/off", json.dumps({"a": 4}))
+            after = len((await c.get("/api/mqtt-log")).json())
+            check("off 로 되돌리면 다시 안 남는다", before == after, f"{before} -> {after}")
 
             r = await c.get("/api/system")
             check("시스템 상태", r.status_code == 200 and "detection_sources" in r.json())
