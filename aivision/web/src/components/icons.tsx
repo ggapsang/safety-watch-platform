@@ -61,6 +61,16 @@ export const IconSignal = ({ size = 15, className }: IconProps) => (
   </svg>
 );
 
+/** 모듈 — 꽂아 넣는 조각 */
+export const IconModule = ({ size = 15, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="2" y="2" width="5" height="5" rx="1" />
+    <rect x="9" y="2" width="5" height="5" rx="1" />
+    <rect x="2" y="9" width="5" height="5" rx="1" />
+    <path d="M9.5 11.5h4.5M11.75 9.25v4.5" />
+  </svg>
+);
+
 /** 관리자 — 슬라이더 */
 export const IconSettings = ({ size = 15, className }: IconProps) => (
   <svg {...base(size)} className={className}>

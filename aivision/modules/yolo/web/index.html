@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>서버 YOLO — 학습과 추론</title>
+<!--
+  모듈 화면. 빌드 도구를 쓰지 않고 정적 파일 두 개로 끝낸다.
+
+  왜 React 를 쓰지 않는가: 이 화면은 폼 하나, 표 둘, 로그 창 하나다. 여기에 번들러를
+  붙이면 모듈 이미지에 node 를 넣거나 빌드 단계를 하나 더 두어야 하는데, 그 비용이
+  얻는 것보다 크다. 플랫폼 화면(web/)은 React 를 쓰는 것이 맞고, 여기는 아니다.
+
+  색과 글꼴은 플랫폼 토큰(web/src/styles/theme.css)에서 같은 값을 옮겨 왔다. 탭 안에
+  iframe 으로 들어가므로 경계가 튀지 않아야 한다.
+-->
+<style>
+  :root {
+    --canvas: #faf9f5; --surface-soft: #f5f0e8; --surface-card: #efe9de;
+    --ink: #141413; --body-strong: #252523; --body: #3d3d3a;
+    --muted: #6c6a64; --muted-soft: #8e8b82;
+    --primary: #cc785c; --primary-active: #a9583e; --primary-soft: #f0ddd3;
+    --success: #5db872; --warning: #d4a017; --error: #c64545;
+    --hairline: #e6dfd8; --dark: #181715;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 22px 24px 40px;
+    background: var(--canvas); color: var(--body);
+    font: 14px/1.55 "Pretendard", -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  h1 { margin: 0 0 4px; font-size: 19px; color: var(--ink); letter-spacing: -0.01em; }
+  h2 { margin: 0 0 3px; font-size: 14.5px; color: var(--body-strong); }
+  .sub { margin: 0 0 20px; font-size: 12.5px; color: var(--muted); }
+  .grid { display: grid; gap: 18px; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); }
+  @media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .card {
+    background: #fff; border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 16px 17px;
+  }
+  .card + .card { margin-top: 16px; }
+  .desc { margin: 0 0 13px; font-size: 12px; color: var(--muted); }
+  label { display: block; margin-bottom: 11px; font-size: 12.5px; color: var(--body-strong); }
+  label > span { display: block; margin-bottom: 4px; font-weight: 600; }
+  label > em { display: block; margin-top: 3px; font-size: 11.5px; font-style: normal; color: var(--muted-soft); }
+  input, select {
+    width: 100%; padding: 7px 9px; font: inherit; font-size: 13px; color: var(--body-strong);
+    background: var(--canvas); border: 1px solid var(--hairline); border-radius: 7px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--primary-soft); border-color: var(--primary); }
+  .row { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+  button {
+    padding: 7px 14px; font: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--body-strong); background: var(--canvas);
+    border: 1px solid var(--hairline); border-radius: 7px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary-active); }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover:not(:disabled) { background: var(--primary-active); color: #fff; }
+  button.danger:hover:not(:disabled) { border-color: var(--error); color: var(--error); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--hairline); }
+  th { font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: none; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 99px;
+    font-size: 11px; font-weight: 600;
+  }
+  .pill.running { background: var(--primary-soft); color: var(--primary-active); }
+  .pill.done { background: #dff0e2; color: #2f7a44; }
+  .pill.failed, .pill.canceled { background: #f6dede; color: #9b3232; }
+  .pill.unknown { background: var(--surface-card); color: var(--muted); }
+  pre {
+    margin: 0; padding: 11px 12px; height: 320px; overflow: auto;
+    background: var(--dark); color: #d8d3ca; border-radius: 9px;
+    font: 11.5px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+  }
+  .bar { height: 6px; background: var(--surface-card); border-radius: 99px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--primary); transition: width .4s; }
+  .kv { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; margin-bottom: 12px; }
+  .kv b { color: var(--body-strong); }
+  .warn {
+    margin: 0 0 14px; padding: 10px 12px; border-radius: 9px;
+    background: #fdf6e3; border: 1px solid #f0dfae; color: #8a6708; font-size: 12.5px;
+  }
+  .msg { min-height: 18px; margin-top: 9px; font-size: 12px; }
+  .msg.ok { color: #2f7a44; } .msg.err { color: var(--error); }
+  .muted { color: var(--muted); }
+  code { font: 12px ui-monospace, Consolas, monospace; color: var(--body-strong); }
+</style>
+</head>
+<body>
+  <h1>서버 YOLO — 학습과 추론</h1>
+  <p class="sub">
+    이 화면은 모듈이 직접 띄웁니다. 플랫폼 코어는 여기에 무엇이 있는지 모릅니다 —
+    등록된 모듈의 주소를 탭으로 감싸 보여 주기만 합니다.
+  </p>
+
+  <div id="notice"></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>학습 시작</h2>
+        <p class="desc">
+          데이터셋 준비(라벨링·프레임 추출)는 이 모듈의 일이 아닙니다. 준비된 데이터셋
+          yaml 을 골라 주세요.
+        </p>
+        <form id="train-form">
+          <label><span>학습 이름</span>
+            <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
+                   placeholder="trash-v4" />
+            <em>산출물 폴더 이름이 됩니다. 영문·숫자·. _ - 만 씁니다.</em>
+          </label>
+          <label><span>데이터셋</span>
+            <select name="data" id="data-select" required></select>
+            <em id="data-hint">볼륨에서 찾은 데이터셋 yaml 입니다.</em>
+          </label>
+          <label><span>사전학습 가중치</span>
+            <select name="weights" id="weights-select"></select>
+            <em>전이학습 출발점. 처음부터 학습하면 이 규모의 데이터로는 성능이 나오지 않습니다.</em>
+          </label>
+          <div class="row">
+            <label><span>epoch</span><input name="epochs" type="number" value="60" min="1" max="1000" /></label>
+            <label><span>batch</span><input name="batch" type="number" value="16" min="1" max="128" /></label>
+          </div>
+          <div class="row">
+            <label><span>이미지 크기</span><input name="imgsz" type="number" value="640" min="320" max="1920" step="32" /></label>
+            <label><span>장치</span>
+              <input name="device" id="device-input" placeholder="0" />
+              <em>GPU 번호 또는 cpu</em>
+            </label>
+          </div>
+          <button class="primary" id="start-btn" type="submit">학습 시작</button>
+          <button class="danger" id="cancel-btn" type="button">취소</button>
+          <div class="msg" id="train-msg"></div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>추론 상태</h2>
+        <p class="desc">추론은 학습과 무관하게 계속 돕니다. 판정은 MQTT 로 나갑니다.</p>
+        <div class="kv" id="infer-kv"></div>
+        <table><tbody id="infer-rows"></tbody></table>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>진행 중인 학습</h2>
+        <div id="progress"></div>
+        <pre id="log">로그가 없습니다.</pre>
+      </div>
+
+      <div class="card">
+        <h2>학습 결과</h2>
+        <p class="desc">
+          쓸 모델을 고르면 ONNX 로 내보내 추론이 보는 자리에 복사합니다.
+          그 뒤 모듈을 다시 시작하면 새 모델로 돕니다.
+        </p>
+        <table>
+          <thead><tr><th>이름</th><th>상태</th><th>epoch</th><th>가중치</th><th></th></tr></thead>
+          <tbody id="run-rows"></tbody>
+        </table>
+        <div class="msg" id="run-msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>배치된 모델</h2>
+        <p class="desc">추론이 쓰는 폴더입니다. 여기 있는 것을 <code>MODEL_PATH</code> 로 가리킵니다.</p>
+        <table>
+          <thead><tr><th>파일</th><th>크기</th><th>만든 시각</th></tr></thead>
+          <tbody id="model-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

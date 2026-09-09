@@ -11,11 +11,13 @@ import {
   IconChart,
   IconDashboard,
   IconList,
+  IconModule,
   IconSettings,
   IconSignal,
 } from "./icons";
 import { fmtClock } from "../lib/format";
-import { useClock, type LiveState } from "../lib/hooks";
+import { useClock, useModules, type LiveState } from "../lib/hooks";
+import type { AnalyticsModule } from "../lib/types";
 import { cx } from "./ui";
 
 interface NavItem {
@@ -58,8 +60,30 @@ const GROUPS: { group: string; items: NavItem[] }[] = [
 
 const ALL = GROUPS.flatMap((g) => g.items);
 
+/** 화면을 가진 모듈을 사이드바 그룹 하나로 만든다.
+ *
+ * 코어는 그 화면 안에 무엇이 있는지 모른다. 등록할 때 endpoint 를 준 모듈이면 무엇이든
+ * 여기 나타난다 — 학습 화면이든 협력사 설정 화면이든 구분하지 않는다(매니페스토 2번).
+ * 그래서 이 함수에는 특정 모듈 이름이 하나도 없다.
+ */
+function moduleGroup(modules: AnalyticsModule[]): { group: string; items: NavItem[] }[] {
+  const withUi = modules.filter((m) => m.endpoint && m.enabled);
+  if (!withUi.length) return [];
+  return [{
+    group: "모듈",
+    items: withUi.map((m) => ({
+      to: `/modules/${m.id}`,
+      label: m.name || m.id,
+      desc: m.description || "모듈이 직접 띄우는 화면",
+      icon: <IconModule />,
+    })),
+  }];
+}
+
 export function Shell({ live, children }: { live: LiveState; children: ReactNode }) {
   const now = useClock();
+  const { data: modules = [] } = useModules();
+  const groups = [...GROUPS, ...moduleGroup(modules)];
   const { pathname } = useLocation();
   const current = ALL.find((i) => i.to === pathname) ?? ALL[0];
 
@@ -79,7 +103,7 @@ export function Shell({ live, children }: { live: LiveState; children: ReactNode
         </div>
 
         <nav className="flex-1 overflow-y-auto px-[14px] py-[14px]">
-          {GROUPS.map((g) => (
+          {groups.map((g) => (
             <div key={g.group} className="mb-[22px]">
               <div className="px-3 pb-[10px] text-[11px] font-semibold uppercase tracking-[.12em] text-muted-soft">
                 {g.group}

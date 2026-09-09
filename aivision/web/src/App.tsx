@@ -6,6 +6,7 @@ import { useLiveFeed } from "./lib/hooks";
 import { Cameras } from "./pages/Cameras";
 import { Dashboard } from "./pages/Dashboard";
 import { Events } from "./pages/Events";
+import { ModuleFrame } from "./pages/ModuleFrame";
 
 // MQTT 로그와 관리자 화면은 상시 보는 화면이 아니다. mqtt.js 가 번들에서 가장 무거워
 // 첫 화면 로딩까지 붙잡아 둘 이유가 없다.
@@ -31,6 +32,8 @@ export default function App() {
           <Route path="/stats" element={<Stats />} />
           <Route path="/mqtt" element={<MqttLog />} />
           <Route path="/admin" element={<Admin />} />
+          {/* 화면을 가진 모듈이면 무엇이든 여기로 들어온다. 코어는 안을 모른다. */}
+          <Route path="/modules/:moduleId" element={<ModuleFrame />} />
           <Route path="*" element={<Dashboard />} />
         </Routes>
       </Suspense>

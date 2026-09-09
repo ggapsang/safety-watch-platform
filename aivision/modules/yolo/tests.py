@@ -222,8 +222,90 @@ def test_platform_contract() -> None:
           "라이브 토픽의 카메라 조각")
 
 
+# ────────────────────────────────────────────────── 5. 학습 배관
+
+def test_training_plumbing() -> None:
+    """학습을 실제로 돌리지 않고 확인할 수 있는 것들.
+
+    GPU 도 데이터셋도 없는 곳에서 도는 검증이라, '무엇을 거부하는가' 를 본다.
+    잘못된 입력을 조용히 받아 몇 시간 뒤에 실패하는 것이 가장 나쁘다.
+    """
+    print("학습 배관")
+    import tempfile
+
+    import training
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        trainer = training.Trainer(root / "runs")
+        check(trainer.status()["busy"] is False, "처음에는 놀고 있다")
+        check(trainer.runs() == [], "학습 기록이 없다")
+
+        try:
+            trainer.start(name="x", data=str(root / "none.yaml"), weights="",
+                          hyp="h", cfg="c", epochs=1, batch=1, imgsz=640, device="cpu")
+        except FileNotFoundError:
+            check(True, "없는 데이터셋은 시작 전에 거부한다")
+        else:
+            check(False, "없는 데이터셋은 시작 전에 거부한다")
+
+        # 데이터셋 탐색: 학습용 yaml 과 하이퍼파라미터 yaml 을 가려낸다
+        ds = root / "datasets"
+        ds.mkdir()
+        nl = chr(10)
+        (ds / "trash.yaml").write_text(
+            nl.join(["train: ./images/train", "val: ./images/val",
+                     "nc: 1", "names: ['trash']", ""]), encoding="utf-8")
+        (ds / "hyp.yaml").write_text(
+            nl.join(["lr0: 0.01", "momentum: 0.937", ""]), encoding="utf-8")
+        found = training.find_datasets([ds])
+        check(len(found) == 1 and found[0]["name"] == "trash.yaml",
+              f"데이터셋 yaml 만 골라낸다 ({[f['name'] for f in found]})")
+        check(found[0]["nc"] == 1, "클래스 수를 읽는다")
+
+        # 모델 목록
+        models = root / "models"
+        models.mkdir()
+        (models / "a.onnx").write_bytes(b"x" * 2048)
+        (models / "notes.txt").write_text("무시", encoding="utf-8")
+        listed = training.list_models(models)
+        check(len(listed) == 1 and listed[0]["name"] == "a.onnx", "onnx 만 모델로 센다")
+
+        try:
+            training.export_onnx(root / "없는가중치.pt")
+        except FileNotFoundError:
+            check(True, "없는 가중치는 내보내기 전에 거부한다")
+        else:
+            check(False, "없는 가중치는 내보내기 전에 거부한다")
+
+        # 배치는 복사다 — 학습 폴더를 지워도 추론이 죽지 않아야 한다
+        src = root / "run" / "weights"
+        src.mkdir(parents=True)
+        onnx = src / "best.onnx"
+        onnx.write_bytes(b"y" * 1024)
+        dest = training.publish(onnx, models, "picked.onnx")
+        import shutil as _sh
+
+        _sh.rmtree(root / "run")
+        check(dest.is_file() and dest.read_bytes() == b"y" * 1024,
+              "배치한 모델은 학습 폴더를 지워도 남는다")
+
+
+def test_vendor_present() -> None:
+    """vendor/yolov7 이 실제로 들어 있는지. 없으면 학습이 시작조차 안 된다."""
+    print("vendor 확인")
+    import training
+
+    for name in ("train.py", "test.py", "export.py", "_compat.py"):
+        check((training.VENDOR / name).is_file(), f"vendor/yolov7/{name}")
+    check((training.VENDOR / "cfg" / "training" / "yolov7.yaml").is_file(),
+          "모델 구조 yaml")
+    check((training.VENDOR / "data" / "hyp.iseco2.yaml").is_file(), "하이퍼파라미터 yaml")
+
+
 def main() -> int:
-    for fn in (test_output_shapes, test_scale_back, test_debounce, test_platform_contract):
+    for fn in (test_output_shapes, test_scale_back, test_debounce, test_platform_contract,
+               test_training_plumbing, test_vendor_present):
         fn()
     print(f"\n검증 {CHECKS}개 통과 ({time.strftime('%H:%M:%S')})")
     return 0

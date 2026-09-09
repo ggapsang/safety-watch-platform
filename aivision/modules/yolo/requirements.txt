@@ -1,4 +1,27 @@
+# 추론
 numpy>=1.26,<3
 opencv-python-headless>=4.10
-paho-mqtt>=2.1
 onnxruntime>=1.18
+paho-mqtt>=2.1
+
+# 모듈 화면·API
+fastapi>=0.115
+uvicorn>=0.32
+pydantic>=2.9
+
+# 학습 (vendor/yolov7 이 요구하는 것)
+# torch 는 Dockerfile 에서 인덱스를 골라 따로 설치한다 — CPU 판과 CUDA 판의 용량이
+# 열 배 넘게 달라서, 여기 고정하면 GPU 없는 곳에서 몇 GB 를 헛되게 받는다.
+PyYAML>=6.0
+tqdm>=4.66
+# vendor/yolov7 의 models/common.py 가 최상단에서 import 한다(가중치 자동 다운로드용).
+requests>=2.32
+# FLOPs 표시. 없어도 돌지만 학습 로그에 모델 크기가 안 찍혀 비교가 어려워진다.
+thop>=0.1.1
+matplotlib>=3.8
+scipy>=1.11
+pandas>=2.2
+seaborn>=0.13
+tensorboard>=2.16
+onnx>=1.16
+onnx-simplifier>=0.4

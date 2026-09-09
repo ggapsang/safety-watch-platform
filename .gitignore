@@ -33,3 +33,7 @@ refs/legacy-iseco-pc/runtime/
 
 # 스모크 테스트가 만드는 SQLite 파일
 aivision/server/.smoke.db
+
+# YOLO 모듈이 쓰는 모델 파일. 수십~수백 MB 라 저장소에 넣지 않는다.
+aivision/models/*.pt
+aivision/models/*.onnx

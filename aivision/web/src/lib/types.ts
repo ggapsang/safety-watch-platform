@@ -228,6 +228,22 @@ export interface AppSettings {
   event_dedup_sec: number;
 }
 
+/** 분석 모듈. 코어는 모듈이 무엇을 하는지 모른다 — 이름과 살아 있는지, 그리고
+ *  자기 화면이 있으면 그 주소만 안다. */
+export interface AnalyticsModule {
+  id: string;
+  name: string;
+  kind: string;
+  description: string;
+  capabilities: string[];
+  /** 모듈이 자기 화면을 들고 있을 때 그 주소. 있으면 사이드바에 탭이 생긴다 */
+  endpoint: string;
+  enabled: boolean;
+  alive: boolean;
+  last_seen_at: string | null;
+  assignments: { id: number; camera_id: number; enabled: boolean }[];
+}
+
 export interface SystemStatus {
   detection_sources: {
     name: string;

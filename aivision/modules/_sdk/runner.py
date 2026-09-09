@@ -143,13 +143,15 @@ class Runner:
     """모듈 본체. `make_source` 는 워커마다 새 소스를 만들어 준다."""
 
     def __init__(self, cfg, make_source, on_boxes=None, on_stream_end=None,
-                 kind: str = "sidecar", description: str = "") -> None:
+                 kind: str = "sidecar", description: str = "",
+                 endpoint: str = "") -> None:
         self.cfg = cfg
         self.make_source = make_source
         self.on_boxes = on_boxes
         self.on_stream_end = on_stream_end
         self.kind = kind
         self.description = description
+        self.endpoint = endpoint
         self.platform = Platform(cfg.platform_url, cfg.module_id)
         self.publisher = Publisher(cfg.mqtt_host, cfg.mqtt_port, cfg.module_id)
         self.workers: dict[int, SourceWorker] = {}
@@ -191,7 +193,7 @@ class Runner:
 
         while not self.stop_event.is_set():
             if self.platform.register(cfg.module_name, cfg.capabilities,
-                                      self.kind, self.description):
+                                      self.kind, self.description, self.endpoint):
                 break
             log.warning("플랫폼 등록 실패 — 5초 후 재시도 (%s)", cfg.platform_url)
             if self.stop_event.wait(5.0):

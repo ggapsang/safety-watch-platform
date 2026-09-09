@@ -1,23 +1,27 @@
-"""서버 YOLO 사이드카 — 영상을 받아 추론하고 전이만 발행한다.
+"""서버 YOLO 모듈 — 학습과 추론을 한 컨테이너에서.
 
-배관(등록·일감 수령·워커 수명주기·발행·heartbeat)은 `_sdk` 가 진다. 여기 남는 것은
-이 모듈만 아는 것 셋이다.
+이 모듈은 다른 모듈과 성격이 다르다. 카메라 메타데이터 모듈은 켜 두면 알아서 도는데,
+이쪽은 **사람이 할 일이 있다** — 데이터셋을 고르고, 학습을 돌리고, 결과를 보고 어느
+가중치를 쓸지 정한다. 그래서 자기 화면과 API 를 직접 들고 있다(기본 11990).
 
-  · 프레임을 어떻게 얻고 무엇으로 추론하는가        YoloSource
-  · 모델이 없을 때 배관만 돌려 보는 방법            DryRunSource
-  · 언제 이벤트로 올리는가                          on_boxes / on_stream_end
+한 프로세스에 둘을 담는다.
+  · 추론 워커   SDK Runner. 배경 스레드에서 돈다. 판정은 MQTT 로 발행한다.
+  · API·화면    FastAPI/uvicorn. 메인 스레드에서 돈다.
+학습은 이 프로세스가 아니라 **자식 프로세스**로 돌린다(`training.py` 참조) — 몇 시간을
+돌고 죽을 때 프로세스를 데려가므로, 같이 두면 추론과 화면이 함께 죽는다.
 
-**라이브 박스와 이벤트를 둘 다 낸다**는 점이 카메라 메타데이터 모듈과 다르다.
-저쪽은 카메라가 이미 판정해 둔 것을 그리기만 하지만, 여기는 우리가 판정하므로
-'무엇이 사건인가'를 정할 수 있다. 다만 **전이 순간만** 올린다 — 사람이 서 있는 동안
-초당 여러 번 나오는 판독을 이벤트로 쌓으면 DB 가 무너진다.
+셋을 한 컨테이너에 두는 이유는 같은 것을 보기 때문이다. 학습이 만든 가중치를 추론이 읽고,
+화면은 그 둘의 상태를 보여 준다. 나누면 모델 파일을 공유 볼륨으로 주고받고 상태를 또
+API 로 물어야 하는데, 얻는 것이 없다.
 
-영상은 카메라가 아니라 미디어 서버에서 가져온다. 일감(/work)이 준 주소를 그대로 쓰므로
-카메라 계정을 알 필요가 없고 카메라 세션도 늘지 않는다.
+주의: GPU 는 하나다. 학습이 도는 동안 추론은 느려진다. 그것이 문제가 되는 현장이면
+학습은 다른 PC 에서 돌리고(PLATFORM_URL 만 바꾸면 원격 모듈이 된다) 이 컨테이너는
+추론만 맡기면 된다.
 
 실행
   python main.py                  모델이 있으면 추론, 없으면 dry-run 으로 내려앉는다
   python main.py --dry-run        모델을 무시하고 합성 박스를 발행 (전 경로 점검용)
+  python main.py --no-serve       화면·API 없이 추론만 (예전 사이드카처럼)
 """
 
 from __future__ import annotations
@@ -27,11 +31,13 @@ import random
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Iterator
 
 sys.path.insert(0, "/app")                     # _sdk 가 옆에 놓인다
 
 import config as config_module                 # noqa: E402
+import training                                # noqa: E402
 from _sdk import (Debouncer, Runner, Source, WorkItem, configure_logging,  # noqa: E402
                   main_loop)
 
@@ -136,15 +142,22 @@ class YoloSource(_Base):
         cap, model = self.cap, self.model
         if cap is None or model is None:
             raise RuntimeError("스트림이 열리지 않았습니다")
+        min_px = self.cfg.min_box_px
 
         while not stop.is_set():
             ok, frame = cap.read()
             if not ok or frame is None:
                 raise RuntimeError("프레임 읽기 실패")
+            h, w = frame.shape[:2]
 
             live: list[dict] = []
             found: dict[str, list[dict]] = {}
             for det in model.infer(frame):
+                if min_px and _short_side_px(det, w, h) < min_px:
+                    # 작은 이물질(볼트·나사류)을 무시하고 싶을 때 쓴다. 학습 라벨에서
+                    # 빼는 것보다 여기서 거르는 편이 낫다 — 사내 실험에서 라벨을 지우면
+                    # 감독이 모순되어 큰 목표의 성능까지 떨어졌다(mAP 0.851 -> 0.737).
+                    continue
                 box = det.to_box()
                 live.append(box)                       # 화면에는 클래스 이름 그대로
                 code = model.item_code(det.cls)
@@ -155,6 +168,13 @@ class YoloSource(_Base):
 
             if stop.wait(self.interval):
                 break
+
+
+def _short_side_px(det, width: int, height: int) -> float:
+    """박스의 기하평균 크기(픽셀). 사내 기준이 sqrt(w*h) 였다."""
+    bw = max(0.0, det.x2 - det.x1) * width
+    bh = max(0.0, det.y2 - det.y1) * height
+    return (bw * bh) ** 0.5
 
 
 # ────────────────────────────────────────────────────────────── 이벤트로 올리기
@@ -181,11 +201,14 @@ def _emit(worker, transitions) -> None:
                                      t.state, t.confidence, t.boxes)
 
 
+# ────────────────────────────────────────────────────────────── 기동
+
 def main(argv: list[str]) -> int:
     configure_logging()
     cfg = config_module.load()
     if "--dry-run" in argv:
         cfg.dry_run = True
+    serve = "--no-serve" not in argv
 
     make = DryRunSource if cfg.dry_run else YoloSource
     log.info("모듈 %s 기동 (%s)", cfg.module_id,
@@ -196,9 +219,35 @@ def main(argv: list[str]) -> int:
         make_source=lambda item: make(cfg, item),
         on_boxes=on_boxes,
         on_stream_end=on_stream_end,
-        description="서버에서 RTSP 를 받아 추론하는 사이드카",
+        # 플랫폼이 이 주소를 탭으로 감싸 보여 준다. 브라우저가 닿는 주소여야 하므로
+        # 컨테이너 이름이 아니라 밖에서 보이는 주소를 넣는다.
+        endpoint=cfg.public_url,
+        description="서버에서 RTSP 를 받아 추론하고, 학습도 여기서 돌린다",
     )
-    return main_loop(runner)
+
+    if not serve:
+        return main_loop(runner)
+
+    # 추론 워커를 배경으로 돌리고 메인 스레드는 화면·API 를 서빙한다.
+    # 순서가 중요하다 — 워커가 먼저 떠야 화면이 첫 폴링에서 상태를 볼 수 있다.
+    import uvicorn
+
+    import api
+
+    worker = threading.Thread(target=runner.run, name="inference", daemon=True)
+    worker.start()
+
+    trainer = training.Trainer(Path(cfg.runs_dir))
+    app = api.create_app(cfg, trainer, runner.status)
+    log.info("모듈 화면: %s (컨테이너 안에서는 :%d)", cfg.public_url, cfg.serve_port)
+
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=cfg.serve_port, log_level="warning")
+    finally:
+        runner.stop_event.set()
+        worker.join(timeout=10)
+        trainer.cancel()
+    return 0
 
 
 if __name__ == "__main__":

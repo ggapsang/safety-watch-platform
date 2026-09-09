@@ -1,0 +1,45 @@
+# ISECO v2 (4클래스) 온라인 증강 설정
+#
+# 오프라인 증강(v2_build_dataset.py)과 역할을 나눈다:
+#   오프라인 = 90/180/270 회전, 명도, 조명 기울기, 약한 채도  (박스 변환이 정확한 것들)
+#   온라인   = 임의 각도 회전, 스케일, mosaic, 상하/좌우 반전 (매 epoch 달라지는 것들)
+# 중복을 피하려고 오프라인에서 한 것을 온라인에서 다시 세게 걸지 않는다.
+
+lr0: 0.01
+lrf: 0.1
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+box: 0.05
+cls: 0.3
+cls_pw: 1.0
+obj: 0.7
+obj_pw: 1.0
+iou_t: 0.20
+anchor_t: 4.0
+fl_gamma: 0.0
+
+# --- 색상: 약하게 ---
+# 4종 판별이 색에 크게 의존한다(커피 스틱의 올리브와 병의 초록이 특히 가깝다).
+# 기존 hsv_s 0.7은 그 신호를 파괴하고 있었다. 명도(v)만 현장 조명 대응으로 남긴다.
+hsv_h: 0.005
+hsv_s: 0.2
+hsv_v: 0.4
+
+# --- 기하: 강하게 ---
+# top-down 고정 시점이라 상하 반전과 임의 회전이 물리적으로 유효하다.
+# 촬영 거리가 3~4단계로 흩어져 있으므로 스케일 불변성이 중요하다.
+degrees: 180.0
+translate: 0.2
+scale: 0.8
+shear: 0.0
+perspective: 0.0
+flipud: 0.5
+fliplr: 0.5
+mosaic: 0.4
+mixup: 0.0
+copy_paste: 0.0
+paste_in: 0.0
+loss_ota: 1

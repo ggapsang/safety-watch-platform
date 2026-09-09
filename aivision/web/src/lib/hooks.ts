@@ -29,6 +29,11 @@ export const useSettings = () =>
 export const useSystem = () =>
   useQuery({ queryKey: ["system"], queryFn: api.system, refetchInterval: 5_000 });
 
+/** 분석 모듈 목록. 사이드바가 '화면을 가진 모듈' 을 탭으로 만들 때 쓴다.
+ *  모듈은 재시작하며 붙었다 떨어지므로 주기적으로 다시 본다. */
+export const useModules = () =>
+  useQuery({ queryKey: ["modules"], queryFn: api.modules, refetchInterval: 15_000 });
+
 export type { LiveState };
 
 export const useBindings = () =>

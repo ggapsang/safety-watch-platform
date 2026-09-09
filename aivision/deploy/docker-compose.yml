@@ -130,21 +130,34 @@ services:
       timeout: 5s
       retries: 5
 
-  # 서버 YOLO 사이드카.
+  # 서버 YOLO 모듈 — 학습과 추론, 그리고 자기 화면(11990).
   #
-  # 코어가 아니라 별도 컨테이너인 이유: 추론 의존성(onnxruntime · opencv)이 무겁고,
-  # 추론이 죽을 때 웹서버가 같이 죽어서는 안 되며, 모델 로딩이 서버 기동을 붙잡아서도
-  # 안 된다. 그리고 이 모듈은 5단계에서 만든 모듈 계약의 첫 사용자여야 한다 —
+  # 코어가 아니라 별도 컨테이너인 이유: torch·onnxruntime·opencv 로 이미지가 GB 단위로
+  # 불어나고, 학습이나 추론이 죽을 때 웹서버가 같이 죽어서는 안 되며, 모델 로딩이 서버
+  # 기동을 붙잡아서도 안 된다. 그리고 이 모듈은 모듈 계약의 사용자여야 한다 —
   # 코어 안에 두면 계약을 우회하는 특별 통로가 생긴다(매니페스토 1번).
+  #
+  # 이 모듈만 화면을 갖는 이유: 사람이 할 일이 있다(데이터셋 선택·학습·모델 채택).
+  # 그 화면을 플랫폼에 넣으면 코어가 YOLO 를 알게 되므로(매니페스토 2번) 모듈이 직접
+  # 띄우고, 플랫폼은 등록된 endpoint 를 탭으로 감싸기만 한다.
   #
   # profile 로 묶어 기본은 꺼 둔다. 모델이 없는 환경에서 켜 두면 혼란만 준다.
   #   docker compose --profile yolo up -d --build
+  #
+  # GPU 로 학습하려면 CUDA 판 torch 로 빌드하고 아래 deploy 블록의 주석을 푼다.
+  #   docker compose build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 mod-yolo
   mod-yolo:
     profiles: ["yolo"]
     build:
       # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
       context: ../modules
       dockerfile: yolo/Dockerfile
+      args:
+        # 기본은 CPU 판이라 어디서든 빌드된다. 학습에는 CUDA 판이 필요하다.
+        TORCH_INDEX: ${YOLO_TORCH_INDEX:-https://download.pytorch.org/whl/cpu}
+    ports:
+      # 모듈 자기 화면·API. 플랫폼 탭이 이 주소를 감싼다.
+      - "${YOLO_UI_PORT:-11990}:8000"
     restart: unless-stopped
     depends_on:
       base-app:
@@ -176,11 +189,29 @@ services:
       SAMPLE_FPS: ${YOLO_SAMPLE_FPS:-3}
       HOLD_SEC: ${YOLO_HOLD_SEC:-3}
       MIN_CONF: ${YOLO_MIN_CONF:-0.4}
+      # 이 크기(sqrt(w*h) 픽셀)보다 작은 박스는 버린다. 0 이면 안 버린다.
+      # 라벨에서 지우는 것보다 여기서 거르는 편이 낫다(사내 실험 기록 — config.py 주석).
+      MIN_BOX_PX: ${YOLO_MIN_BOX_PX:-0}
       DRY_RUN: ${YOLO_DRY_RUN:-false}
+      # 브라우저가 닿는 주소. 플랫폼이 이 주소를 탭으로 감싼다.
+      # 다른 PC 에서 접속시킬 거라면 localhost 대신 서버 PC 의 IP 를 넣어야 한다.
+      PUBLIC_URL: ${YOLO_PUBLIC_URL:-http://localhost:11990}
+      # 학습에 쓸 장치. GPU 번호 또는 cpu. CPU 로는 현실적으로 학습이 안 된다.
+      TRAIN_DEVICE: ${YOLO_TRAIN_DEVICE:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      # 모델 파일은 호스트에서 넣는다. 이미지에 굽지 않는다.
-      - ../models:/models:ro
+      # 모델과 사전학습 가중치. 학습 결과를 여기에 쓰므로 읽기 전용이 아니다.
+      - ../models:/models
+      # 학습 산출물과 데이터셋. 수십 GB 가 될 수 있어 볼륨으로 둔다.
+      - training:/training
+    # GPU 학습을 쓸 때 주석을 푼다. Docker Desktop 은 WSL2 GPU 지원이 켜져 있어야 한다.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
   # 카메라 ONVIF 메타데이터 -> 라이브 박스.
   #
@@ -223,7 +254,8 @@ services:
 # 새 빈 볼륨이 생기고 기존 DB·녹화가 통째로 사라진다. 이름이 옛 서비스명을 닮은 것은
 # 그 대가에 비하면 사소하다.
 volumes:
-  db-data:         # PostgreSQL 데이터 (base-db)
+  db-data:
+  training:        # 학습 산출물·데이터셋 (mod-yolo). 수십 GB 가 될 수 있다         # PostgreSQL 데이터 (base-db)
   recordings:      # 미디어 서버의 상시 녹화 세그먼트 — 회전 삭제됨 (base-media)
   media-data:      # 플랫폼 자산 — 스냅샷과 이벤트 클립, 오래 보관 (base-app)
   mqtt-data:       # 브로커 영속 세션 (base-broker)

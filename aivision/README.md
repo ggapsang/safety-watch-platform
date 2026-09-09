@@ -71,6 +71,7 @@ docker compose up -d --build
 | MQTT WebSocket (브라우저) | `<서버IP>:11881` | 'MQTT 로그' 화면 직결 구독 |
 | PostgreSQL | `<서버IP>:11882` | 분석·점검용 직접 조회 |
 | **RTSP (분석 모듈)** | `rtsp://<서버IP>:8554/cam/{id}` | 모듈이 영상을 가져가는 곳 |
+| 서버 YOLO 모듈 화면 | `<서버IP>:11990` | 학습·모델 관리. 플랫폼 탭에서도 열립니다 |
 | 미디어 WebRTC / HLS | `<서버IP>:11884` / `:11885` | 브라우저 저지연 재생(현재 미사용) |
 
 > 8080·5432 는 다른 프로그램과 자주 부딪혀 118xx 대역으로 옮겼습니다.
@@ -98,7 +99,7 @@ docker compose up -d --build
 | `base-broker` | mosquitto | 카메라와 모듈이 판정을 실어 보내는 전선 |
 | `base-media` | MediaMTX | 카메라에서 한 번만 당겨 여러 소비자에게 나눠 줍니다(fan-out) + 녹화·재생 |
 | `mod-camera-meta` | 카메라 메타데이터 모듈 | 카메라가 이미 만든 박스를 읽어 화면에 그립니다 (`--profile meta`) |
-| `mod-yolo` | 서버 YOLO 사이드카 | 우리가 직접 추론합니다 (`--profile yolo`) |
+| `mod-yolo` | 서버 YOLO 모듈 | 우리가 직접 학습하고 추론합니다. 자기 화면을 11990 에 띄웁니다 (`--profile yolo`) |
 
 ```bash
 docker compose up -d --build                              # base-* 만
@@ -324,12 +325,14 @@ docker compose logs -f mod-camera-meta
 cd aivision/modules/onvif_meta && python tests.py    # 카메라 없이 파서 검증
 ```
 
-## 서버 YOLO 사이드카
+## 서버 YOLO 모듈 — 학습부터 추론까지
 
-`aivision/modules/yolo/` 에 있습니다. **코어 코드가 아니라 위 모듈 계약의 첫 사용자**입니다.
+`aivision/modules/yolo/` 에 있습니다. **코어 코드가 아니라 모듈 계약의 사용자**입니다.
+다른 모듈과 다른 점이 둘 있습니다 — **학습까지 여기서 돌리고**, 그래서 **자기 화면을
+직접 띄웁니다**(기본 11990).
 
-코어에 넣지 않은 이유가 셋입니다. onnxruntime·opencv 가 서버 이미지에 수백 MB(GPU 면 몇 GB)를
-붙입니다. 추론이 죽을 때 웹서버가 같이 죽습니다. 모델 로딩이 서버 기동을 붙잡습니다.
+코어에 넣지 않은 이유가 셋입니다. torch·onnxruntime·opencv 가 서버 이미지를 GB 단위로
+불립니다. 학습이나 추론이 죽을 때 웹서버가 같이 죽습니다. 모델 로딩이 서버 기동을 붙잡습니다.
 그리고 넷째가 가장 중요합니다 — 코어 안에 두면 우리 모듈만 계약을 우회하는 특별 통로가
 생깁니다. 별도 컨테이너로 두면 협력사 모듈과 완전히 같은 조건으로 붙습니다.
 
@@ -338,6 +341,45 @@ cd aivision/deploy
 docker compose --profile yolo up -d --build      # 기본은 꺼져 있습니다
 docker compose logs -f mod-yolo
 ```
+
+### 화면은 모듈이 띄우고, 플랫폼은 탭으로 감쌉니다
+
+이 모듈은 사람이 할 일이 있습니다 — 데이터셋을 고르고, 학습을 돌리고, 로그를 지켜보고,
+어느 가중치를 쓸지 정합니다. 그 화면을 플랫폼에 넣으면 **코어가 YOLO 를 알게 됩니다**
+(매니페스토 2번). 그래서 화면도 모듈이 가집니다.
+
+플랫폼은 모듈이 등록할 때 준 `endpoint` 를 사이드바 **모듈** 그룹에 탭으로 만들고 iframe
+으로 감싸기만 합니다. 코어 코드에는 'yolo' 라는 단어가 한 번도 나오지 않습니다 — 협력사가
+자기 화면을 들고 와도 똑같이 동작합니다.
+
+브라우저가 닿는 주소여야 하므로 다른 PC 에서 접속시킬 계획이면 `.env` 의
+`YOLO_PUBLIC_URL` 을 서버 PC 의 IP 로 바꿔야 합니다.
+
+### 학습
+
+학습은 **자식 프로세스**로 돌립니다. 몇 시간을 돌고 죽을 때 프로세스를 통째로 데려가므로
+(CUDA OOM, segfault) 같이 두면 추론과 화면이 함께 죽습니다. 한 번에 하나만 돌립니다 —
+GPU 가 하나여서 둘을 돌리면 둘 다 느려지거나 OOM 이 납니다.
+
+| 준비할 것 | 어디에 |
+|---|---|
+| 데이터셋 (이미지·라벨 + yaml) | `training` 볼륨의 `/training/datasets` |
+| 사전학습 가중치 `yolov7_training.pt` | `aivision/models/` ([공식 릴리스](https://github.com/WongKinYiu/yolov7/releases)) |
+
+**라벨링과 데이터 준비는 이 모듈의 일이 아닙니다.** 준비된 데이터셋 yaml 을 가리키기만
+합니다. 학습이 끝나면 화면에서 '모델로 쓰기' 를 누르면 ONNX 로 내보내
+`aivision/models/` 에 복사합니다. 학습 폴더를 지워도 쓰던 모델이 사라지지 않도록
+참조가 아니라 **복사**합니다.
+
+```bash
+# 학습에는 CUDA 판 torch 가 필요합니다. 기본 이미지는 CPU 판이라 어디서든 빌드만 됩니다.
+docker compose build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 mod-yolo
+# 그리고 docker-compose.yml 의 mod-yolo deploy 블록(GPU 예약) 주석을 풉니다.
+```
+
+학습 본체는 `modules/yolo/vendor/yolov7/` 입니다. 원본
+([WongKinYiu/yolov7](https://github.com/WongKinYiu/yolov7), **GPL-3.0**)에서 학습·평가·
+내보내기에 필요한 27개 파일만 옮겼습니다. 자세한 것은 `vendor/README.md` 를 보십시오.
 
 띄운 뒤 해야 하는 일은 둘입니다. 관리자 화면에서 **모듈에 카메라를 할당**하고,
 **인바운드 바인딩**을 만드는 것입니다(프리셋 '우리 모듈 (탐지)' · '우리 모듈 (라이브 박스)'
@@ -466,7 +508,11 @@ aivision/
 │  ├─ _sdk/               공용 배관 — 등록·일감 폴링·발행·워커 수명주기·전이 판정
 │  │                      모듈이 구현할 것은 Source 하나뿐입니다
 │  ├─ onvif_meta/         카메라 메타데이터 -> 라이브 박스 (모델 불필요)
-│  └─ yolo/               서버 YOLO 사이드카 (inference.py 가 추론부)
+│  └─ yolo/               서버 YOLO — 학습·추론·자기 화면(11990)
+│     ├─ inference.py       추론 (전처리 -> 백엔드 -> 후처리)
+│     ├─ training.py        학습·내보내기를 자식 프로세스로 실행
+│     ├─ api.py · web/      모듈이 직접 띄우는 화면과 API
+│     └─ vendor/yolov7/     학습 본체 (외부 소스, GPL-3.0 — vendor/README.md)
 │
 ├─ models/            모델 파일을 넣는 곳 (mod-yolo 에 /models 로 마운트)
 └─ web/               React + Vite + Tailwind v4 (빌드 결과가 base-app 이미지로 들어갑니다)

@@ -51,11 +51,18 @@ class Platform:
         return None
 
     def register(self, name: str, capabilities: list[str], kind: str = "sidecar",
-                 description: str = "") -> bool:
-        """등록. 같은 id 로 다시 불러도 갱신이라 재시작마다 실패하지 않는다."""
+                 description: str = "", endpoint: str = "") -> bool:
+        """등록. 같은 id 로 다시 불러도 갱신이라 재시작마다 실패하지 않는다.
+
+        `endpoint` 는 모듈이 자기 화면·API 를 들고 있을 때 그 주소다. 플랫폼은 이 값이
+        있으면 화면에 탭으로 감싸 보여 주기만 하고 그 안에 무엇이 있는지는 모른다 —
+        모듈이 무엇을 하는지 코어가 알아야 할 이유가 없다(매니페스토 2번).
+        브라우저가 닿는 주소여야 하므로 컨테이너 이름이 아니라 밖에서 보이는 주소를 넣는다.
+        """
         return self._call("POST", "/api/modules", {
             "id": self.module_id, "name": name, "kind": kind,
-            "description": description, "capabilities": capabilities}) is not None
+            "description": description, "capabilities": capabilities,
+            "endpoint": endpoint}) is not None
 
     def work(self) -> list[WorkItem] | None:
         """무엇을 볼지 물어본다. None 은 '플랫폼이 안 보인다'이지 '일감 없음'이 아니다."""
