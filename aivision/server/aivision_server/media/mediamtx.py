@@ -32,8 +32,8 @@ log = logging.getLogger(__name__)
 TIMEOUT = 6.0
 
 
-def path_name(camera_id: int) -> str:
-    return f"cam/{camera_id}"
+def path_name(camera_id: int, *, sub: bool = False) -> str:
+    return f"cam/{camera_id}/sub" if sub else f"cam/{camera_id}"
 
 
 class MediaMTXBackend(MediaBackend):
@@ -92,31 +92,54 @@ class MediaMTXBackend(MediaBackend):
         from ..streaming.manager import rtsp_url
 
         name = path_name(camera.id)
+        ok, body = await self._put_path(name, rtsp_url(camera))
+        if not ok:
+            return StreamInfo(stream_id=name, detail=f"경로 등록 실패: {body}")
+
+        # 보조(저화질) 경로. 카메라가 저화질 프로파일을 함께 내보낼 때만 만든다.
+        # on-demand 로 두는 것이 여기서는 맞다 — 보는 모듈이 없으면 카메라 세션을
+        # 하나 아끼는 편이 낫다. 주 스트림과 달리 녹화도 감시도 걸려 있지 않다.
+        sub_url = rtsp_url(camera, sub=True)
+        sub_name = path_name(camera.id, sub=True)
+        if sub_url:
+            sub_ok, sub_body = await self._put_path(sub_url and sub_name, sub_url,
+                                                    on_demand=True)
+            if not sub_ok:
+                log.warning("보조 스트림 등록 실패(#%d): %s", camera.id, sub_body)
+        else:
+            # 경로를 지웠다면 미디어 서버에서도 내린다. 남겨 두면 죽은 경로가 쌓인다.
+            await self._call("DELETE", f"/v3/config/paths/delete/{sub_name}")
+
+        info = await self.stream_info(camera.id)
+        return info or self._urls(name)
+
+    async def _put_path(self, name: str, source: str, *,
+                        on_demand: bool = False) -> tuple[bool, Any]:
         conf = {
-            "source": rtsp_url(camera),
+            "source": source,
             "sourceProtocol": "tcp",
-            # on-demand 로 두면 보는 사람이 없을 때 카메라 연결이 끊긴다.
+            # 주 스트림은 on-demand 로 두면 보는 사람이 없을 때 카메라 연결이 끊긴다.
             # 녹화와 상시 감시를 하려면 항상 붙어 있어야 한다.
-            "sourceOnDemand": False,
+            "sourceOnDemand": on_demand,
         }
         ok, body = await self._call("POST", f"/v3/config/paths/add/{name}", json=conf)
         if not ok:
             # 이미 있으면 patch 로 갱신한다(접속 정보가 바뀌었을 수 있다).
             ok, body = await self._call("PATCH", f"/v3/config/paths/patch/{name}", json=conf)
-        if not ok:
-            return StreamInfo(stream_id=name, detail=f"경로 등록 실패: {body}")
-
-        info = await self.stream_info(camera.id)
-        return info or self._urls(name)
+        return ok, body
 
     async def drop_stream(self, camera_id: int) -> None:
-        name = path_name(camera_id)
-        await self._call("DELETE", f"/v3/config/paths/delete/{name}")
+        for name in (path_name(camera_id), path_name(camera_id, sub=True)):
+            await self._call("DELETE", f"/v3/config/paths/delete/{name}")
 
     async def stream_info(self, camera_id: int) -> StreamInfo | None:
         name = path_name(camera_id)
+        # 보조 경로는 '설정에 있는가' 로 본다. on-demand 라 보는 사람이 없으면
+        # 실행 중 경로 목록에는 안 나온다 — 없는 것으로 착각하면 안 된다.
+        sub_ok, _ = await self._call(
+            "GET", f"/v3/config/paths/get/{path_name(camera_id, sub=True)}")
         ok, body = await self._call("GET", f"/v3/paths/get/{name}")
-        info = self._urls(name)
+        info = self._urls(name, sub=sub_ok)
         if not ok or not isinstance(body, dict):
             info.detail = "경로 없음 또는 미디어 서버 응답 없음"
             return info
@@ -124,10 +147,11 @@ class MediaMTXBackend(MediaBackend):
         info.detail = "" if info.ready else "카메라에서 영상을 받지 못하고 있습니다"
         return info
 
-    def _urls(self, name: str) -> StreamInfo:
+    def _urls(self, name: str, *, sub: bool = False) -> StreamInfo:
         return StreamInfo(
             stream_id=name,
             rtsp=f"rtsp://{self._rtsp_host}/{name}",
+            rtsp_sub=f"rtsp://{self._rtsp_host}/{name}/sub" if sub else "",
             webrtc=f"{self._public}/{name}",
             hls=f"{self._public}/{name}/index.m3u8",
         )

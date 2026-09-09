@@ -53,6 +53,7 @@ const EMPTY: CameraInput = {
   ip: "",
   rtsp_port: 554,
   rtsp_path: "/profile2/media.smp",
+  rtsp_path_sub: "",
   username: "",
   password: "",
   note: "",
@@ -206,6 +207,7 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
             ip: camera.ip,
             rtsp_port: camera.rtsp_port,
             rtsp_path: camera.rtsp_path,
+            rtsp_path_sub: camera.rtsp_path_sub,
             username: camera.username,
             password: "",
             note: camera.note,
@@ -350,6 +352,20 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
               >
                 <Input value={form.rtsp_path} onChange={(e) => set("rtsp_path", e.target.value)} />
               </Field>
+              <Field
+                label="저화질 스트림 경로"
+                className="sm:col-span-2"
+                hint="비워 두면 쓰지 않습니다. 추론 모듈이 4K 를 디코딩할 이유가 없어서 두는
+                      칸입니다 — 모델 입력은 어차피 640 으로 줄여 넣습니다. 한화비전이면
+                      /profile3/media.smp 근처입니다. 카메라 세션이 하나 늘어나는 대신
+                      서버 CPU 를 크게 아낍니다."
+              >
+                <Input
+                  value={form.rtsp_path_sub}
+                  onChange={(e) => set("rtsp_path_sub", e.target.value)}
+                  placeholder="/profile3/media.smp"
+                />
+              </Field>
               <Field label="비고" className="sm:col-span-2">
                 <Input value={form.note} onChange={(e) => set("note", e.target.value)} />
               </Field>
@@ -437,6 +453,9 @@ function RecordUsage() {
         </span>
         <span className="text-muted">
           디스크 여유 <b className="tnum font-semibold text-body">{rec.disk_free_gb}GB</b>
+        </span>
+        <span className="text-muted">
+          저장 위치 <b className="font-mono text-[12px] text-body">{rec.location}</b>
         </span>
         {rec.limit_gb > 0 && (
           <span className={rec.over ? "font-semibold text-error" : "text-muted"}>
@@ -605,6 +624,15 @@ function SettingsAdmin() {
               />
             </Field>
             <RecordUsage />
+            <p className="text-[11.5px] leading-relaxed text-muted-soft">
+              저장 위치는 배포 설정입니다. <code className="font-mono">deploy/.env</code> 의{" "}
+              <code className="font-mono">RECORD_PATH</code> 를 바꾸면 됩니다 — 도커 볼륨
+              이름(<code className="font-mono">recordings</code>)이나 호스트 폴더 경로
+              (<code className="font-mono">D:/aivision-녹화</code>)를 적고{" "}
+              <code className="font-mono">docker compose up -d</code> 로 컨테이너를 다시
+              만듭니다. 화면에서 바꾸지 못하게 둔 이유는, 컨테이너가 도는 중에 붙어 있는
+              디스크를 갈아 끼울 수 없기 때문입니다. 옮겨도 기존 녹화는 따라가지 않습니다.
+            </p>
           </div>
         </Card>
 

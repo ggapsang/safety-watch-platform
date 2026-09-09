@@ -122,16 +122,20 @@ class YoloSource(_Base):
                                         self.cfg.imgsz, self.cfg.conf_thres,
                                         self.cfg.iou_thres, self.cfg.class_map,
                                         self.cfg.layout)
-        if not item.rtsp:
+        # 저화질이 있으면 그것을 쓴다. 모델 입력이 640 이라 4K 를 풀어 놓고 다시 줄이는
+        # 것은 CPU 를 그냥 버리는 일이다. 없으면 원본으로 내려간다.
+        url = item.stream_for(prefer_sub=self.cfg.prefer_sub_stream)
+        if not url:
             raise RuntimeError("일감에 스트림 주소가 없습니다")
-        cap = cv2.VideoCapture(item.rtsp, cv2.CAP_FFMPEG)
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         if not cap.isOpened():
             cap.release()
-            raise RuntimeError(f"스트림을 열 수 없습니다: {item.rtsp}")
+            raise RuntimeError(f"스트림을 열 수 없습니다: {url}")
         # 큐를 짧게 둔다. 밀린 프레임을 따라잡느라 지연이 누적되면 안전관리에서 쓸 수 없다.
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.cap = cap
-        log.info("카메라 %d 스트림 연결: %s", item.camera_id, item.rtsp)
+        log.info("카메라 %d 스트림 연결: %s%s", item.camera_id, url,
+                 "" if item.rtsp_sub and url == item.rtsp_sub else "  (저화질 없음 — 원본)")
 
     def close(self) -> None:
         cap, self.cap = self.cap, None

@@ -21,8 +21,15 @@ class WorkItem:
 
     camera_id: int
     camera_name: str
-    rtsp: str
+    rtsp: str                                    # 원본 스트림
+    # 저화질 스트림. 카메라가 저화질 프로파일을 함께 내보낼 때만 채워진다.
+    # 무엇을 쓸지는 모듈이 정한다 — 추론은 저화질이 낫고, 원본 해상도가 필요한 판독도 있다.
+    rtsp_sub: str = ""
     options: dict = field(default_factory=dict)
+
+    def stream_for(self, *, prefer_sub: bool) -> str:
+        """이 모듈이 쓸 주소. 저화질이 없으면 원본으로 내려간다."""
+        return (self.rtsp_sub or self.rtsp) if prefer_sub else self.rtsp
 
 
 class Platform:
@@ -72,6 +79,7 @@ class Platform:
         return [WorkItem(camera_id=int(row["camera_id"]),
                          camera_name=row.get("camera_name") or "",
                          rtsp=row.get("rtsp") or "",
+                         rtsp_sub=row.get("rtsp_sub") or "",
                          options=row.get("options") or {})
                 for row in data.get("items", [])]
 

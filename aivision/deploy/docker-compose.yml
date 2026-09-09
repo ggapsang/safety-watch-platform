@@ -73,7 +73,10 @@ services:
       - "${HLS_PORT:-11885}:8888"
     volumes:
       - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
-      - recordings:/recordings
+      # 녹화를 어디에 쌓을지. 기본은 도커 볼륨이고, .env 의 RECORD_PATH 에 호스트 경로를
+      # 적으면(예: D:/aivision-recordings) 그 폴더에 쌓인다. 큰 디스크로 옮길 때 쓴다.
+      # 컨테이너 안쪽 경로(/recordings)는 바뀌지 않는다 — 바뀌는 것은 '무엇을 붙이나' 다.
+      - ${RECORD_PATH:-recordings}:/recordings
     # 헬스체크를 두지 않는다. 이 이미지는 셸도 wget 도 없는 최소 이미지라
     # CMD-SHELL 이 아예 실행되지 않고 영원히 unhealthy 로 남는다(잘못된 경보).
     # 미디어 서버 상태는 서버가 Control API 로 확인해 /api/system 에 보여 준다.
@@ -116,14 +119,17 @@ services:
       RECORD_DIR: /recordings
       # 전체 용량 상한(GB). 0 이면 제한 없음. 관리자 화면에서 덮어쓸 수 있다.
       RECORD_MAX_GB: ${RECORD_MAX_GB:-0}
+      # 위 마운트의 '호스트 쪽' 이름. 화면에 '지금 어디에 쌓이는가' 를 보여 주는 용도일 뿐
+      # 서버는 이 값으로 아무것도 하지 않는다(컨테이너 안에서는 늘 /recordings 다).
+      RECORD_LOCATION: ${RECORD_PATH:-recordings}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "${HTTP_PORT:-11880}:8000"
     volumes:
       - media-data:/data
-      # 미디어 서버와 같은 볼륨을 본다. 쓰는 쪽은 미디어 서버 하나뿐이고
+      # 미디어 서버와 같은 것을 본다. 쓰는 쪽은 미디어 서버 하나뿐이고
       # 코어는 용량을 재고 넘칠 때 오래된 것을 지우기 위해 붙는다.
-      - recordings:/recordings
+      - ${RECORD_PATH:-recordings}:/recordings
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health').read()"]
       interval: 20s

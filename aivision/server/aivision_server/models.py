@@ -66,6 +66,14 @@ class Camera(Base):
     ip: Mapped[str] = mapped_column(String(45), index=True)          # IPv4/IPv6
     rtsp_port: Mapped[int] = mapped_column(Integer, default=554)
     rtsp_path: Mapped[str] = mapped_column(String(200), default="/profile2/media.smp")
+    # 보조(저화질) 스트림 경로. 비우면 없는 것으로 본다.
+    #
+    # 왜 두는가: 추론 모듈이 4K 를 디코딩할 이유가 없다. 모델 입력은 어차피 640 으로
+    # 줄여 넣으므로 3840x2160 을 풀어 놓고 다시 줄이는 것은 CPU 를 그냥 버리는 것이다.
+    # 카메라가 이미 저화질 프로파일을 함께 내보내므로(한화비전은 profile3 등) 그것을
+    # 미디어 서버에 하나 더 등록해 모듈에게 준다. 카메라 부하는 세션 하나만큼 늘고,
+    # 그 대신 서버의 디코딩 부담이 크게 준다.
+    rtsp_path_sub: Mapped[str] = mapped_column(String(200), default="")
     username: Mapped[str] = mapped_column(String(64), default="")
     password_enc: Mapped[str] = mapped_column(Text, default="")      # Fernet 암호문
     # 카메라가 MQTT 로 발행할 때 토픽 접두로 쓰는 MAC. 대문자 콜론 표기(E4:30:22:...).

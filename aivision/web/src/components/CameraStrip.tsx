@@ -60,10 +60,13 @@ export function CameraStrip({
   cameras,
   selectedId,
   onSelect,
+  orientation = "vertical",
 }: {
   cameras: Camera[];
   selectedId: number | null;
   onSelect: (id: number) => void;
+  /** 세로는 큰 화면 옆에, 가로는 큰 화면 아래에 놓을 때. 카메라가 늘면 그 방향으로 스크롤된다. */
+  orientation?: "vertical" | "horizontal";
 }) {
   const qc = useQueryClient();
   // 끄는 동안에는 손끝을 따라 즉시 자리가 바뀌어야 한다. 서버 응답을 기다리면 뚝뚝 끊긴다.
@@ -111,8 +114,17 @@ export function CameraStrip({
     save.mutate(list.map((c) => c.id));
   }
 
+  const horizontal = orientation === "horizontal";
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto pr-1">
+    <div
+      className={cx(
+        "flex gap-2",
+        horizontal
+          ? "w-full flex-row overflow-x-auto pb-1"
+          : "h-full min-h-0 flex-col overflow-y-auto pr-1",
+      )}
+    >
       {items.map((cam) => {
         const active = cam.id === selectedId;
         const dragging = cam.id === dragId;
@@ -129,6 +141,7 @@ export function CameraStrip({
             title="끌어서 순서를 바꿀 수 있습니다"
             className={cx(
               "shrink-0 cursor-grab rounded-lg border p-[6px] text-left transition-colors active:cursor-grabbing",
+              horizontal && "w-[132px]",
               active
                 ? "border-primary bg-primary-soft/40"
                 : "border-hairline bg-canvas hover:border-primary/40 hover:bg-surface-soft",

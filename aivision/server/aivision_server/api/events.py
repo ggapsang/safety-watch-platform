@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -89,12 +89,21 @@ async def summary(session: AsyncSession = Depends(get_session)) -> SummaryOut:
     dtos = [cam_dto(c) for c in cams]
     normal = sum(1 for d in dtos if d.status == "normal")
 
+    # 셋 다 로컬 자정 기준이다. '최근 7일' 이 아니라 '이번 주' 로 세면 월요일마다 숫자가
+    # 튀어 추세를 못 읽는다. 그래서 오늘 포함 7일·30일 창으로 센다.
     midnight = datetime.now(local_tz()).replace(hour=0, minute=0, second=0, microsecond=0)
-    today = int((await session.execute(
-        select(func.count(Event.id)).where(Event.ts >= midnight))).scalar() or 0)
+
+    async def count_since(start: datetime) -> int:
+        return int((await session.execute(
+            select(func.count(Event.id)).where(Event.ts >= start))).scalar() or 0)
+
+    today = await count_since(midnight)
+    week = await count_since(midnight - timedelta(days=6))
+    month = await count_since(midnight - timedelta(days=29))
 
     return SummaryOut(cameras_total=len(dtos), cameras_normal=normal,
-                      cameras_offline=len(dtos) - normal, events_today=today)
+                      cameras_offline=len(dtos) - normal, events_today=today,
+                      events_week=week, events_month=month)
 
 
 @router.get("/export.csv")

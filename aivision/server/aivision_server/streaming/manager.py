@@ -29,15 +29,21 @@ from .worker import CameraWorker
 log = logging.getLogger(__name__)
 
 
-def rtsp_url(cam: Camera) -> str:
-    """카메라 레코드 → RTSP URL. 자격증명은 URL 인코딩한다(비밀번호에 @, / 가 흔하다)."""
+def rtsp_url(cam: Camera, *, sub: bool = False) -> str:
+    """카메라 레코드 → RTSP URL. 자격증명은 URL 인코딩한다(비밀번호에 @, / 가 흔하다).
+
+    sub=True 면 보조(저화질) 스트림. 경로가 비어 있으면 빈 문자열을 돌려준다 —
+    '없다' 와 '주 스트림과 같다' 는 다르다. 같다고 보면 저화질인 줄 알고 4K 를 준다.
+    """
+    path = (cam.rtsp_path_sub if sub else cam.rtsp_path) or ("" if sub else "/")
+    if not path:
+        return ""
     pw = decrypt(cam.password_enc)
     cred = ""
     if cam.username:
         cred = f"{quote(cam.username, safe='')}:{quote(pw, safe='')}@"
     port = cam.rtsp_port or 554
     host = f"{cam.ip}:{port}" if port != 554 else cam.ip
-    path = cam.rtsp_path or "/"
     if not path.startswith("/"):
         path = "/" + path
     return f"rtsp://{cred}{host}{path}"

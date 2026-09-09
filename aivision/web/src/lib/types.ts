@@ -21,6 +21,8 @@ export interface Camera {
   ip: string;
   rtsp_port: number;
   rtsp_path: string;
+  /** 보조(저화질) 스트림 경로. 비우면 없음 */
+  rtsp_path_sub: string;
   username: string;
   has_password: boolean;
   mac: string;
@@ -50,6 +52,7 @@ export interface CameraInput {
   location: string;
   rtsp_port: number;
   rtsp_path: string;
+  rtsp_path_sub: string;
   username: string;
   password: string;
   note: string;
@@ -104,6 +107,9 @@ export interface Summary {
   cameras_normal: number;
   cameras_offline: number;
   events_today: number;
+  /** 오늘 포함 7일 / 30일 창. '이번 주' 로 세면 월요일마다 숫자가 튄다 */
+  events_week: number;
+  events_month: number;
 }
 
 export interface SeriesPoint {
@@ -284,6 +290,8 @@ export interface SystemStatus {
     limit_gb: number;
     over: boolean;
     disk_free_gb: number;
+    /** 지금 어디에 쌓이나. 도커 볼륨 이름이거나 호스트 폴더 경로 */
+    location: string;
   };
 }
 

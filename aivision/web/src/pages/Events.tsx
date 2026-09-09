@@ -17,7 +17,7 @@ import type { SafetyEvent } from "../lib/types";
 const PAGE = 50;
 
 export function Events() {
-  const { state } = useLocation() as { state?: { preset?: "today" } };
+  const { state } = useLocation() as { state?: { preset?: "today" | "week" | "month" } };
   const { data: cameras = [] } = useCameras();
 
   const today = isoDate();
@@ -31,8 +31,14 @@ export function Events() {
   const [selected, setSelected] = useState<SafetyEvent | null>(null);
 
   useEffect(() => {
-    if (state?.preset === "today") {
-      setStart(today);
+    // 종합 현황의 셀에서 넘어올 때 기간을 맞춰 준다. 셀에 30 이라고 떠 있는데
+    // 목록에는 오늘 것만 보이면 숫자가 틀린 것처럼 보인다.
+    const spans: Record<string, number> = { today: 0, week: 6, month: 29 };
+    const days = state?.preset ? spans[state.preset] : undefined;
+    if (days !== undefined) {
+      const from = new Date();
+      from.setDate(from.getDate() - days);
+      setStart(isoDate(from));
       setEnd(today);
     }
     // 진입 시 한 번만 적용한다.

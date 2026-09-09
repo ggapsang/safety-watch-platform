@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # '용량이 얼마나 찼나'와 '넘치면 무엇부터 버리나'는 정책이고, 미디어 서버는 시간 기반
     # 회전(recordDeleteAfter)까지만 할 수 있기 때문이다.
     record_dir: Path = Path("./data/recordings")
+    # 녹화가 실제로 쌓이는 곳의 '호스트 쪽' 이름. 화면에 보여 주기만 한다 —
+    # 컨테이너 안에서는 늘 record_dir 이고, 어디에 붙일지는 배포가 정한다(compose 의
+    # RECORD_PATH). 이 값으로 서버가 하는 일은 없다.
+    record_location: str = ""
     # 상시 녹화 전체 용량 상한(GB). 0 이면 제한하지 않는다.
     #
     # 카메라별이 아니라 전체 하나로 두는 이유: 디스크가 하나라서다. 카메라마다 상한을 주면

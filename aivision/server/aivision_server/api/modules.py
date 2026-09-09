@@ -150,6 +150,7 @@ async def work(module_id: str, session: AsyncSession = Depends(get_session)) -> 
         items.append(ModuleWorkItem(
             camera_id=cam.id, camera_name=cam.name, location=cam.location,
             rtsp=getattr(info, "rtsp", "") or "",
+            rtsp_sub=getattr(info, "rtsp_sub", "") or "",
             snapshot=f"/api/stream/{cam.id}/snapshot.jpg",
             options=a.options or {},
         ))

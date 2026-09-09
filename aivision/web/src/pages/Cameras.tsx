@@ -8,6 +8,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 
+import { CameraStrip } from "../components/CameraStrip";
 import { LiveVideo } from "../components/LiveVideo";
 import {
   Button,
@@ -51,6 +52,9 @@ export function Cameras() {
     if (state?.filter) setFilter(state.filter);
   }, [state?.filter]);
 
+  // 고른 카메라. 아직 고르지 않았거나 그 카메라가 사라졌으면 첫 번째를 보여 준다.
+  const focusedCam = cameras.find((c) => c.id === focused) ?? cameras[0] ?? null;
+
   const shown = cameras.filter((c) =>
     filter === "all" ? true : filter === "normal" ? c.status === "normal" : c.status !== "normal",
   );
@@ -74,27 +78,9 @@ export function Cameras() {
         />
       </div>
 
-      <Section title="라이브 확인" desc="카메라를 선택하면 아래 목록에서 강조됩니다">
-        {cameras.length === 0 ? (
-          <Card className="py-14 text-center text-[13px] text-muted-soft">
-            등록된 카메라가 없습니다.
-          </Card>
-        ) : (
-          <div className="grid gap-5 md:grid-cols-2">
-            {cameras.map((cam) => (
-              <LiveVideo
-                key={cam.id}
-                camera={cam}
-                boxes={liveBoxes[cam.id]}
-                now={now}
-                onClick={() => setFocused(cam.id === focused ? null : cam.id)}
-                className={cx(focused === cam.id && "ring-2 ring-primary")}
-              />
-            ))}
-          </div>
-        )}
-      </Section>
-
+      {/* 왼쪽에 목록, 오른쪽에 라이브. 목록을 보며 고르고 바로 옆에서 확인하는 흐름이라
+        * 둘을 위아래로 두면 시선이 화면 밖까지 오르내린다. */}
+      <div className="grid gap-5 xl:[grid-template-columns:minmax(0,1fr)_minmax(0,1fr)]">
       <Section
         title="카메라 목록"
         desc="물리 카메라 상태 및 솔루션 매핑"
@@ -162,6 +148,40 @@ export function Cameras() {
           )}
         </Card>
       </Section>
+
+      {/* 큰 화면 하나 + 그 아래 가로 줄. 카메라가 늘면 아래 줄이 옆으로 스크롤된다.
+        * 전부를 같은 크기로 늘어놓으면 대수가 늘수록 하나도 제대로 안 보인다. */}
+      <Section title="라이브 확인" desc="아래에서 카메라를 고르면 크게 보입니다">
+        {cameras.length === 0 ? (
+          <Card className="py-14 text-center text-[13px] text-muted-soft">
+            등록된 카메라가 없습니다.
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {focusedCam ? (
+              <LiveVideo
+                camera={focusedCam}
+                boxes={liveBoxes[focusedCam.id]}
+                now={now}
+                overlayTitle={focusedCam.location || focusedCam.name}
+              />
+            ) : (
+              <Card className="flex aspect-video items-center justify-center text-[13px] text-muted-soft">
+                카메라를 선택하세요
+              </Card>
+            )}
+            {cameras.length > 1 && (
+              <CameraStrip
+                cameras={cameras}
+                selectedId={focused}
+                onSelect={setFocused}
+                orientation="horizontal"
+              />
+            )}
+          </div>
+        )}
+      </Section>
+      </div>
 
       <QuickEdit camera={editing} onClose={() => setEditing(null)} />
     </>

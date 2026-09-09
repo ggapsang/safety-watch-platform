@@ -51,6 +51,7 @@ class CameraOut(BaseModel):
     ip: str
     rtsp_port: int
     rtsp_path: str
+    rtsp_path_sub: str = ""        # 보조(저화질) 스트림. 비우면 없음
     username: str
     has_password: bool
     mac: str
@@ -64,6 +65,7 @@ class CameraOut(BaseModel):
     detection_source: str
     stream_url: str                # MJPEG 주소 (브라우저용)
     rtsp_url: str = ""             # 분석 모듈이 영상을 가져가는 곳 (미디어 서버 경유)
+    rtsp_sub_url: str = ""         # 그중 저화질 (추론 모듈용). 없으면 빈 값
     record_enabled: bool = False
     record_retention_hours: int = 72
     sort_order: int = 0            # 화면에 늘어놓는 순서 (작을수록 앞)
@@ -94,6 +96,8 @@ class CameraCreate(BaseModel):
     location: str = Field(default="", max_length=120)
     rtsp_port: int = 554
     rtsp_path: str = "/profile2/media.smp"
+    # 보조(저화질) 스트림 경로. 한화비전이면 보통 /profile3/media.smp 근처다.
+    rtsp_path_sub: str = ""
     username: str = ""
     password: str = ""
     mac: str = ""
@@ -119,6 +123,7 @@ class CameraPatch(BaseModel):
     ip: str | None = None
     rtsp_port: int | None = None
     rtsp_path: str | None = None
+    rtsp_path_sub: str | None = None
     username: str | None = None
     password: str | None = None       # 빈 문자열이면 '변경 없음'으로 취급
     mac: str | None = None
@@ -285,7 +290,11 @@ class ModuleWorkItem(BaseModel):
     camera_id: int
     camera_name: str
     location: str
-    rtsp: str                     # 미디어 서버에서 가져가는 주소
+    rtsp: str                     # 미디어 서버에서 가져가는 주소(원본)
+    # 저화질 스트림. 있으면 추론 모듈은 이쪽을 쓰는 편이 낫다 — 모델 입력이 어차피
+    # 640 이라 4K 를 풀어 놓고 다시 줄이는 것은 CPU 를 버리는 일이다.
+    # 주 스트림을 굳이 써야 하는 모듈(원본 해상도가 필요한 판독)은 rtsp 를 쓰면 된다.
+    rtsp_sub: str = ""
     snapshot: str
     options: dict = Field(default_factory=dict)
 
@@ -428,6 +437,9 @@ class SummaryOut(BaseModel):
     cameras_normal: int
     cameras_offline: int
     events_today: int
+    # 주·월은 '오늘' 만으로는 추세를 알 수 없어서 함께 준다. 셋 다 자정 기준 로컬 시각이다.
+    events_week: int = 0
+    events_month: int = 0
 
 
 # ────────────────────────────────────────────────────────────── 설정

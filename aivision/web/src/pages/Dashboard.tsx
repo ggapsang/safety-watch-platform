@@ -127,9 +127,10 @@ export function Dashboard() {
           )}
         </Section>
 
-        {/* ── 오른쪽 절반: KPI 스택 + 여백 ───────────────────────────── */}
+        {/* ── 오른쪽 절반: 현황 셀(왼쪽) + LLM 자리(오른쪽) ─────────── */}
         <Section title="현황" desc="누르면 해당 목록으로 이동합니다" className="mb-0">
-          <div className="flex h-[420px] flex-col gap-[10px]">
+          <div className="grid h-[420px] gap-3 [grid-template-columns:minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="flex min-h-0 flex-col gap-[10px] overflow-y-auto pr-1">
             <KpiRow
               label="등록 카메라"
               value={summary?.cameras_total ?? 0}
@@ -156,9 +157,33 @@ export function Dashboard() {
               accent={summary?.events_today ? "primary" : undefined}
               onClick={() => navigate("/events", { state: { preset: "today" } })}
             />
+            <KpiRow
+              label="주간 이벤트"
+              value={summary?.events_week ?? 0}
+              sub="최근 7일"
+              onClick={() => navigate("/events", { state: { preset: "week" } })}
+            />
+            <KpiRow
+              label="월간 이벤트"
+              value={summary?.events_month ?? 0}
+              sub="최근 30일"
+              onClick={() => navigate("/events", { state: { preset: "month" } })}
+            />
+          </div>
 
-            {/* 남은 자리 — 나중에 채운다. 비워 뒀다는 것이 보이도록 점선으로 표시한다. */}
-            <div className="min-h-0 flex-1 rounded-lg border border-dashed border-hairline bg-surface-soft/40" />
+          {/* LLM 이 들어올 자리.
+            *
+            * 축적된 이벤트를 읽어 요약·질의응답을 하는 부분이 여기 붙는다. 지금 비워 두되
+            * 무엇이 올 자리인지는 적어 둔다 — 점선 빈 칸만 있으면 '덜 만든 화면' 으로 보이고,
+            * 나중에 붙일 때 크기가 맞지 않아 옆 셀까지 다시 짜게 된다. */}
+          <div className="flex min-h-0 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-hairline bg-surface-soft/40 px-5 text-center">
+            <span className="text-[13px] font-semibold text-body-strong">AI 요약</span>
+            <span className="text-[12px] leading-relaxed text-muted-soft">
+              쌓인 이벤트를 읽어 오늘의 상황을 정리하고 물어볼 수 있는 자리입니다.
+              <br />
+              아직 붙이지 않았습니다.
+            </span>
+          </div>
           </div>
         </Section>
       </div>

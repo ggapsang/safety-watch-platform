@@ -96,6 +96,30 @@ async def main() -> int:
             check("중복 등록 409",
                   (await c.post("/api/cameras", json={"ip": "192.168.10.11"})).status_code == 409)
 
+            # ── 보조(저화질) 스트림 ─────────────────────────────────────
+            # 추론 모듈이 4K 를 디코딩할 이유가 없다. '없다' 와 '주 스트림과 같다' 를
+            # 구분하는 것이 요점 — 같다고 보면 저화질인 줄 알고 원본을 준다.
+            from aivision_server.models import Camera as _Cam
+            from aivision_server.streaming.manager import rtsp_url as _rtsp
+
+            async with sessionmaker()() as sdb:
+                cam_row = await sdb.get(_Cam, cid)
+                check("보조 경로가 비어 있으면 주소도 빈 값",
+                      _rtsp(cam_row, sub=True) == "", _rtsp(cam_row, sub=True))
+
+            r = await c.patch(f"/api/cameras/{cid}",
+                              json={"rtsp_path_sub": "/profile3/media.smp"})
+            check("보조 스트림 경로 저장",
+                  r.json()["rtsp_path_sub"] == "/profile3/media.smp", r.text)
+
+            async with sessionmaker()() as sdb:
+                cam_row = await sdb.get(_Cam, cid)
+                main_url = _rtsp(cam_row)
+                sub_url = _rtsp(cam_row, sub=True)
+            check("보조 주소가 주 주소와 다르다", bool(sub_url) and sub_url != main_url,
+                  f"{main_url} / {sub_url}")
+            check("보조 주소에도 자격증명이 붙는다", "admin" in sub_url, sub_url)
+
             # ── 화면 표시 순서 ──────────────────────────────────────────
             # 등록 순서가 곧 보고 싶은 순서인 경우는 드물다. 브라우저가 아니라 서버가
             # 들고 있어야 관제실 PC 가 여러 대여도 같게 보인다.

@@ -46,6 +46,9 @@ class Config(BaseConfig):
 
     # ── 판정 ──
     sample_fps: float = 3.0              # 초당 몇 장만 본다. 전 프레임 추론은 낭비다
+    # 저화질 스트림이 있으면 그것을 쓴다. 끄면 원본을 쓴다 — 작은 물체를 잡아야 해서
+    # 해상도가 필요한 모델이면 끈다.
+    prefer_sub_stream: bool = True
     # 이 크기(sqrt(w*h), 픽셀)보다 작은 박스는 버린다. 0 이면 안 버린다.
     #
     # 사내 실험 기록: 작은 이물질(볼트·나사류)을 무시하려고 **라벨에서 지웠더니** 오히려
@@ -79,6 +82,7 @@ def load() -> Config:
     cfg.layout = _layout()
     cfg.sample_fps = num("SAMPLE_FPS", 3.0)
     cfg.min_box_px = num("MIN_BOX_PX", 0.0)
+    cfg.prefer_sub_stream = flag("PREFER_SUB_STREAM", True)
     cfg.dry_run = flag("DRY_RUN", False)
 
     cfg.serve_port = int(num("SERVE_PORT", 8000))

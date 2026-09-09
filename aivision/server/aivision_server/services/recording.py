@@ -99,6 +99,8 @@ def usage() -> dict:
         "limit_gb": s.record_max_gb,
         "over": bool(limit and total > limit),
         "disk_free_gb": round(free / GB, 1),
+        # '지금 어디에 쌓이나'. 도커 볼륨 이름이거나 호스트 폴더 경로다.
+        "location": s.record_location or str(s.record_dir),
     }
 
 
