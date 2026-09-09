@@ -34,7 +34,7 @@ def main() -> int:
     os.environ.setdefault("SNAPSHOT_DIR", "./data/snapshots")
     os.environ.setdefault("TZ", "Asia/Seoul")
     # 도커 밖에서 도는 개발 서버는 호스트에 매핑된 브로커 포트로 붙는다.
-    # (컨테이너 안의 서버가 쓰는 mqtt:1883 과 다르다.)
+    # (컨테이너 안의 서버가 쓰는 base-broker:1883 과 다르다.)
     os.environ.setdefault("MQTT_HOST", "localhost")
     os.environ.setdefault("MQTT_PORT", "1883")
     os.environ.setdefault("MQTT_WS_URL", "ws://localhost:11881")

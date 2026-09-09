@@ -40,7 +40,8 @@ docker compose up -d --build
 > 8080·5432 는 다른 프로그램과 자주 부딪혀 118xx 대역으로 옮겼습니다.
 > **MQTT TCP 만 표준 1883 을 그대로 씁니다** — 카메라 기본값이라 여기를 옮기면 현장
 > 카메라마다 설정을 바꿔야 하기 때문입니다.
-> 컨테이너 안쪽은 어느 쪽이든 표준 포트라, 서버는 여전히 `mqtt:1883` · `db:5432` 로 붙습니다.
+> 컨테이너 안쪽은 어느 쪽이든 표준 포트라, 서버는 여전히 `base-broker:1883` · `base-db:5432`
+> 로 붙습니다.
 >
 > 이 PC 에 Mosquitto 를 따로 설치한 적이 있다면 1883 을 이미 점유하고 있을 수 있습니다.
 > `netstat -ano | findstr :1883` 으로 확인하고, 있다면 그 서비스를 먼저 내려야 합니다.
@@ -166,7 +167,7 @@ curl -X POST localhost:11880/api/modules -H 'Content-Type: application/json'   -
 
 # 2. 무엇을 볼지 물어본다 -> 카메라별 RTSP 주소와 옵션을 받아 간다
 curl localhost:11880/api/modules/yolo-ppe/work
-#  {"items":[{"camera_id":4,"rtsp":"rtsp://mediamtx:8554/cam/4","options":{"min_conf":0.5}}]}
+#  {"items":[{"camera_id":4,"rtsp":"rtsp://base-media:8554/cam/4","options":{"min_conf":0.5}}]}
 
 # 3. 판정 결과를 보낸다 — MQTT 발행 또는 HTTP
 curl -X POST localhost:11880/api/ingest -H 'Content-Type: application/json'   -d '{"topic":"aivision/detect/4/yolo-ppe","payload":{"camera_id":4,"item":"ITEM-001",
@@ -199,8 +200,8 @@ curl -X POST localhost:11880/api/ingest -H 'Content-Type: application/json'   -d
 
 ```bash
 cd aivision/deploy
-docker compose --profile meta up -d --build camera-meta
-docker compose logs -f camera-meta
+docker compose --profile meta up -d --build mod-camera-meta
+docker compose logs -f mod-camera-meta
 ```
 
 띄운 뒤 관리자에서 **모듈에 카메라를 할당**하고, 프리셋 '우리 모듈 (라이브 박스)' 로
@@ -239,7 +240,7 @@ cd aivision/modules/onvif_meta && python tests.py    # 카메라 없이 파서 �
 ```bash
 cd aivision/deploy
 docker compose --profile yolo up -d --build      # 기본은 꺼져 있습니다
-docker compose logs -f yolo
+docker compose logs -f mod-yolo
 ```
 
 띄운 뒤 해야 하는 일은 둘입니다. 관리자 화면에서 **모듈에 카메라를 할당**하고,

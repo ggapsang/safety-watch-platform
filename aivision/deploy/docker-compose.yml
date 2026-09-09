@@ -1,16 +1,25 @@
-# AI Vision 통합관제 대시보드 — 운영 스택
+# AI Vision 통합관제 플랫폼 — 운영 스택
 #
-#   [네트워크 카메라] --RTSP--> [server] --MJPEG--> [브라우저]
-#          |                       ^
-#          +--MQTT(ONVIF 이벤트)-->[mosquitto]<--WebSocket-- [브라우저: MQTT 로그 화면]
-#                                  |
-#                              [postgres]
+# 서비스 이름은 '없으면 플랫폼이 안 도는 것'과 '있어도 되고 없어도 되는 것'으로 가른다.
+# 목록만 보고도 무엇을 꺼도 되는지 알 수 있어야 하기 때문이다.
+#
+#   base-*   기본으로 항상 뜬다. 이것들이 없으면 플랫폼이 서지 않는다.
+#   mod-*    분석 모듈. profile 로 켠다. 꺼도 플랫폼은 그대로 돈다.
+#
+#   [카메라] --RTSP--> [base-media] --+--> [base-app] --MJPEG--> [브라우저]
+#                                     +--> [mod-*] (RTSP · 메타데이터)
+#                                     +--> 디스크 (녹화)
+#
+#   [카메라] --MQTT--> [base-broker] <--> [base-app] <--> [base-db]
+#        [mod-*] --MQTT--^                    ^
+#                                    [브라우저] --WebSocket/REST
 #
 # 사용: docker compose -f deploy/docker-compose.yml up -d --build
+#      docker compose --profile meta --profile yolo up -d      (모듈까지 함께)
 name: aivision
 
 services:
-  db:
+  base-db:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -31,7 +40,7 @@ services:
       # 주의: 열려 있는 만큼 POSTGRES_PASSWORD 를 기본값으로 두면 안 된다.
       - "${POSTGRES_PORT:-11882}:5432"
 
-  mqtt:
+  base-broker:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
@@ -51,7 +60,7 @@ services:
       timeout: 6s
       retries: 3
 
-  mediamtx:
+  base-media:
     image: bluenviron/mediamtx:latest
     restart: unless-stopped
     environment:
@@ -69,32 +78,32 @@ services:
     # CMD-SHELL 이 아예 실행되지 않고 영원히 unhealthy 로 남는다(잘못된 경보).
     # 미디어 서버 상태는 서버가 Control API 로 확인해 /api/system 에 보여 준다.
 
-  server:
+  base-app:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
     depends_on:
-      db:
+      base-db:
         condition: service_healthy
-      mqtt:
+      base-broker:
         condition: service_started
-      mediamtx:
+      base-media:
         condition: service_started
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aivision}:${POSTGRES_PASSWORD:-aivision}@db:5432/${POSTGRES_DB:-aivision}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aivision}:${POSTGRES_PASSWORD:-aivision}@base-db:5432/${POSTGRES_DB:-aivision}
       # 서버는 컨테이너 네트워크 안에서 붙으므로 항상 표준 포트다.
       # (위 ports: 의 호스트 포트는 '바깥에서 보이는 주소'일 뿐 여기와 무관하다.)
-      MQTT_HOST: mqtt
+      MQTT_HOST: base-broker
       MQTT_PORT: "1883"
       # 브라우저가 직접 붙을 브로커 주소 — 컨테이너 내부 이름이 아니라 '호스트에서 보이는 주소'여야 한다.
       MQTT_WS_URL: ${MQTT_WS_URL:-ws://localhost:11881}
       # 미디어 평면. direct 로 바꾸면 미디어 서버 없이 카메라에 직접 붙는다(fan-out·녹화 없음).
       MEDIA_BACKEND: ${MEDIA_BACKEND:-mediamtx}
-      MEDIAMTX_API_URL: http://mediamtx:9997
-      MEDIAMTX_PLAYBACK_URL: http://mediamtx:9996
-      MEDIAMTX_RTSP_HOST: mediamtx:8554
+      MEDIAMTX_API_URL: http://base-media:9997
+      MEDIAMTX_PLAYBACK_URL: http://base-media:9996
+      MEDIAMTX_RTSP_HOST: base-media:8554
       # 브라우저가 닿는 주소 — 컨테이너 이름이 아니라 밖에서 보이는 주소여야 한다.
       MEDIAMTX_PUBLIC_URL: ${MEDIAMTX_PUBLIC_URL:-http://localhost:11884}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 를 .env 에 설정하세요 (카메라 비밀번호 암호화 키)}
@@ -121,23 +130,23 @@ services:
   #
   # profile 로 묶어 기본은 꺼 둔다. 모델이 없는 환경에서 켜 두면 혼란만 준다.
   #   docker compose --profile yolo up -d --build
-  yolo:
+  mod-yolo:
     profiles: ["yolo"]
     build:
       context: ../modules/yolo
     restart: unless-stopped
     depends_on:
-      server:
+      base-app:
         condition: service_started
-      mqtt:
+      base-broker:
         condition: service_started
-      mediamtx:
+      base-media:
         condition: service_started
     environment:
       TZ: ${TZ:-Asia/Seoul}
       # 컨테이너 네트워크 안에서 붙는다. 원격 PC 에서 돌릴 때는 호스트 주소로 바꾼다.
-      PLATFORM_URL: http://server:8000
-      MQTT_HOST: mqtt
+      PLATFORM_URL: http://base-app:8000
+      MQTT_HOST: base-broker
       MQTT_PORT: "1883"
       MODULE_ID: ${YOLO_MODULE_ID:-yolo-server}
       MODULE_NAME: ${YOLO_MODULE_NAME:-서버 YOLO}
@@ -167,7 +176,7 @@ services:
   # 우리가 추론하지 않는다. 카메라 안에서 이미 돌고 있는 분석이 만든 박스를 RTSP
   # 메타데이터 트랙에서 읽어 화면에만 그린다. **이벤트를 만들지 않는다** —
   # 사람이 서 있는 동안 초당 여러 번 나오는 판독을 이벤트로 쌓으면 DB 가 무너진다.
-  camera-meta:
+  mod-camera-meta:
     profiles: ["meta"]
     build:
       # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
@@ -175,16 +184,16 @@ services:
       dockerfile: onvif_meta/Dockerfile
     restart: unless-stopped
     depends_on:
-      server:
+      base-app:
         condition: service_started
-      mqtt:
+      base-broker:
         condition: service_started
-      mediamtx:
+      base-media:
         condition: service_started
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      PLATFORM_URL: http://server:8000
-      MQTT_HOST: mqtt
+      PLATFORM_URL: http://base-app:8000
+      MQTT_HOST: base-broker
       MQTT_PORT: "1883"
       MODULE_ID: ${META_MODULE_ID:-camera-meta}
       MODULE_NAME: ${META_MODULE_NAME:-카메라 메타데이터}
@@ -199,9 +208,12 @@ services:
       LIVE_MIN_INTERVAL: ${META_LIVE_MIN_INTERVAL:-0.2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
+# 볼륨 이름은 서비스 이름을 따라 바꾸지 않는다. 볼륨은 이름으로 찾으므로, 바꾸는 순간
+# 새 빈 볼륨이 생기고 기존 DB·녹화가 통째로 사라진다. 이름이 옛 서비스명을 닮은 것은
+# 그 대가에 비하면 사소하다.
 volumes:
-  db-data:
-  recordings:      # 미디어 서버의 상시 녹화 세그먼트 (회전 삭제됨)
-  media-data:      # 코어 자산 — 스냅샷과 이벤트 클립 (오래 보관)
-  mqtt-data:
-  mqtt-log:
+  db-data:         # PostgreSQL 데이터 (base-db)
+  recordings:      # 미디어 서버의 상시 녹화 세그먼트 — 회전 삭제됨 (base-media)
+  media-data:      # 플랫폼 자산 — 스냅샷과 이벤트 클립, 오래 보관 (base-app)
+  mqtt-data:       # 브로커 영속 세션 (base-broker)
+  mqtt-log:        # 브로커 로그 (base-broker)

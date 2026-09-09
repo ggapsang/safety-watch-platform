@@ -56,9 +56,12 @@ class Settings(BaseSettings):
     # mediamtx: 카메라에서 한 번만 당겨 여러 소비자에게 나눠 준다(fan-out·녹화·재생).
     # direct  : 미디어 서버 없이 카메라에 직접 붙는다. fan-out 도 녹화도 없다.
     media_backend: str = "mediamtx"
-    mediamtx_api_url: str = "http://mediamtx:9997"        # 경로 등록/조회 (서버 → 미디어서버)
-    mediamtx_playback_url: str = "http://mediamtx:9996"   # 녹화 구간 목록·추출
-    mediamtx_rtsp_host: str = "mediamtx:8554"             # 분석 모듈이 가져가는 곳
+    # 아래 기본값의 base-media 는 compose 서비스 이름(컨테이너 DNS)이다.
+    # 위 media_backend 의 "mediamtx" 는 백엔드 종류를 고르는 값이라 서로 무관하다 —
+    # 서비스 이름을 바꿔도 종류 이름은 그대로 둔다.
+    mediamtx_api_url: str = "http://base-media:9997"      # 경로 등록/조회 (서버 → 미디어서버)
+    mediamtx_playback_url: str = "http://base-media:9996"  # 녹화 구간 목록·추출
+    mediamtx_rtsp_host: str = "base-media:8554"           # 분석 모듈이 가져가는 곳
     # 브라우저가 WebRTC/HLS 로 붙을 주소. 컨테이너 이름이 아니라 '밖에서 보이는' 주소여야 한다.
     mediamtx_public_url: str = "http://localhost:11884"
     mediamtx_record_dir: str = "/recordings"              # 미디어 서버 컨테이너 안의 경로

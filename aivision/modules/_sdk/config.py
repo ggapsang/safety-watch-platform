@@ -38,10 +38,10 @@ def flag(name: str, default: bool = False) -> bool:
 @dataclass
 class BaseConfig:
     # ── 플랫폼 ──
-    platform_url: str = "http://server:8000"
+    platform_url: str = "http://base-app:8000"
     module_id: str = "module"
     module_name: str = "모듈"
-    mqtt_host: str = "mqtt"
+    mqtt_host: str = "base-broker"
     mqtt_port: int = 1883
 
     # ── 판정 ──

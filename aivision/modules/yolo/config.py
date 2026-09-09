@@ -76,10 +76,10 @@ def _class_map() -> dict[str, str]:
 @dataclass
 class Config:
     # ── 플랫폼 ──
-    platform_url: str = "http://server:8000"
+    platform_url: str = "http://base-app:8000"
     module_id: str = "yolo-server"
     module_name: str = "서버 YOLO"
-    mqtt_host: str = "mqtt"
+    mqtt_host: str = "base-broker"
     mqtt_port: int = 1883
 
     # ── 모델 ──
@@ -114,10 +114,10 @@ class Config:
 def load() -> Config:
     model = _env("MODEL_PATH")
     cfg = Config(
-        platform_url=_env("PLATFORM_URL", "http://server:8000").rstrip("/"),
+        platform_url=_env("PLATFORM_URL", "http://base-app:8000").rstrip("/"),
         module_id=_env("MODULE_ID", "yolo-server"),
         module_name=_env("MODULE_NAME", "서버 YOLO"),
-        mqtt_host=_env("MQTT_HOST", "mqtt"),
+        mqtt_host=_env("MQTT_HOST", "base-broker"),
         mqtt_port=int(_num("MQTT_PORT", 1883)),
         model_path=Path(model) if model else None,
         device=_env("DEVICE", "cuda"),
