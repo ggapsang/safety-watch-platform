@@ -283,8 +283,9 @@ export function BindingAdmin() {
 
           {solutions.length === 0 && (
             <p className="mt-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-[12.5px] text-[#8a6708]">
-              등록된 탐지 항목이 없습니다. 바인딩은 "이 메시지 = 이 항목"을 정하는 것이라,
-              항목을 먼저 만들어야 합니다.
+              등록된 탐지 항목이 없습니다. 이벤트를 만드는 바인딩은 "이 메시지 = 이 항목"을
+              정하는 것이라 항목을 먼저 만들어야 합니다. 화면에 박스만 그리는
+              <b className="font-semibold"> 라이브 전용</b> 바인딩은 항목 없이도 됩니다.
             </p>
           )}
         </Card>
@@ -384,7 +385,10 @@ function BindingForm({ binding, onClose }: { binding: Binding | null; onClose: (
                       ...f,
                       ...preset.patch,
                       // 탐지 항목은 프리셋이 정할 수 없다. 현장에서 만든 것 중에 골라야 한다.
-                      solution_code: f.solution_code ?? solutions[0]?.code ?? null,
+                      // 라이브 전용은 항목 자체가 필요 없으므로 비워 둔다.
+                      solution_code: preset.patch.live_only
+                        ? null
+                        : (f.solution_code ?? solutions[0]?.code ?? null),
                     }))
                   }
                   className="rounded-full border border-hairline bg-canvas px-[13px] py-[5px] text-[12px] text-body transition-colors hover:border-primary/50 hover:text-primary-active"
@@ -514,12 +518,19 @@ function BindingForm({ binding, onClose }: { binding: Binding | null; onClose: (
               </Select>
             </Field>
             {form.item_from === "fixed" ? (
-              <Field label="탐지 항목">
+              <Field
+                label="탐지 항목"
+                hint={
+                  form.live_only
+                    ? "라이브 전용은 비워 두어도 됩니다. 항목은 '무엇을 이벤트로 볼지' 를 정하는 것인데, 라이브 박스는 이벤트가 아닙니다."
+                    : undefined
+                }
+              >
                 <Select
                   value={form.solution_code ?? ""}
                   onChange={(e) => set("solution_code", e.target.value || null)}
                 >
-                  <option value="">선택하세요</option>
+                  <option value="">{form.live_only ? "없음 (박스만 그림)" : "선택하세요"}</option>
                   {solutions.map((s) => (
                     <option key={s.code} value={s.code}>
                       {s.short_name} ({s.code})

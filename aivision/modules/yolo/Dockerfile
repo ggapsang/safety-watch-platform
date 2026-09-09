@@ -19,10 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt .
+COPY yolo/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY *.py .
+# 빌드 컨텍스트는 modules/ 다. 모듈들이 공유하는 SDK 를 같이 담는다.
+COPY _sdk/ /app/_sdk/
+COPY yolo/*.py /app/
 
 # 모델은 이미지에 굽지 않는다. 볼륨으로 넣는다 — 모델이 바뀔 때 이미지를 다시 만들 이유가 없다.
 CMD ["python", "main.py"]

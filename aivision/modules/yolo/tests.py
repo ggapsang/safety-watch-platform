@@ -20,8 +20,10 @@ from pathlib import Path
 
 import numpy as np
 
-import inference
-from debounce import Debouncer
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # _sdk 가 옆에 있다
+
+import inference                                                  # noqa: E402
+from _sdk import Debouncer                                        # noqa: E402
 
 CHECKS = 0
 

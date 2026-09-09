@@ -142,7 +142,9 @@ services:
   mod-yolo:
     profiles: ["yolo"]
     build:
-      context: ../modules/yolo
+      # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
+      context: ../modules
+      dockerfile: yolo/Dockerfile
     restart: unless-stopped
     depends_on:
       base-app:

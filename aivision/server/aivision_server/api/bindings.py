@@ -56,10 +56,13 @@ async def _validate(session: AsyncSession, data: dict) -> None:
 
     if data.get("item_from") == "fixed":
         code = data.get("solution_code") or data.get("item_expr")
-        if not code:
+        # 라이브 전용 바인딩은 탐지 항목을 요구하지 않는다.
+        # 탐지 항목은 '무엇을 이벤트로 볼지' 를 정하는 것인데 라이브 박스는 이벤트가 아니다.
+        # 요구하면 박스를 그리려고 쓰지도 않을 항목을 하나 만들어 두게 된다.
+        if not code and not data.get("live_only"):
             raise HTTPException(status_code=400,
                                 detail="item_from=fixed 이면 탐지 항목을 지정해야 합니다")
-        if await session.get(Solution, code) is None:
+        if code and await session.get(Solution, code) is None:
             raise HTTPException(status_code=400, detail=f"없는 탐지 항목입니다: {code}")
     if data.get("item_from") == "payload" and not (data.get("item_expr") or "").strip():
         raise HTTPException(status_code=400,

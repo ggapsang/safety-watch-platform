@@ -59,13 +59,17 @@ class SourceWorker(threading.Thread):
     """
 
     def __init__(self, item: WorkItem, cfg, publisher: Publisher, source: Source,
-                 on_boxes=None) -> None:
+                 on_boxes=None, on_stream_end=None) -> None:
         super().__init__(name=f"cam{item.camera_id}", daemon=True)
         self.item = item
         self.cfg = cfg
         self.pub = publisher
         self.source = source
         self.on_boxes = on_boxes
+        # 스트림이 끊겼을 때 정리할 것이 있는 모듈을 위한 훅. 예를 들어 전이를 추적하는
+        # 모듈은 여기서 '해제' 를 내보내야 한다 — 안 그러면 화면에 발생 상태가 영원히
+        # 켜져 있다. 무엇을 정리할지는 모듈만 안다.
+        self.on_stream_end = on_stream_end
         self.stop_event = threading.Event()
         self.frames = 0
         self.published = 0
@@ -112,6 +116,11 @@ class SourceWorker(threading.Thread):
                     log.warning("카메라 %d 소스 오류 — %.0fs 후 재시도: %s",
                                 self.item.camera_id, backoff, self.last_error)
                 finally:
+                    if self.on_stream_end is not None:
+                        try:
+                            self.on_stream_end(self)
+                        except Exception:                       # noqa: BLE001
+                            log.exception("스트림 종료 처리 실패")
                     try:
                         self.source.close()
                     except Exception:                           # noqa: BLE001
@@ -133,11 +142,12 @@ class SourceWorker(threading.Thread):
 class Runner:
     """모듈 본체. `make_source` 는 워커마다 새 소스를 만들어 준다."""
 
-    def __init__(self, cfg, make_source, on_boxes=None, kind: str = "sidecar",
-                 description: str = "") -> None:
+    def __init__(self, cfg, make_source, on_boxes=None, on_stream_end=None,
+                 kind: str = "sidecar", description: str = "") -> None:
         self.cfg = cfg
         self.make_source = make_source
         self.on_boxes = on_boxes
+        self.on_stream_end = on_stream_end
         self.kind = kind
         self.description = description
         self.platform = Platform(cfg.platform_url, cfg.module_id)
@@ -159,7 +169,8 @@ class Runner:
             if cam_id in self.workers:
                 continue
             worker = SourceWorker(item, self.cfg, self.publisher,
-                                  self.make_source(item), self.on_boxes)
+                                  self.make_source(item), self.on_boxes,
+                                  self.on_stream_end)
             self.workers[cam_id] = worker
             worker.start()
 

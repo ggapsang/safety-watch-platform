@@ -235,6 +235,10 @@ class BindingEngine:
                       flat: dict[str, Any]) -> tuple[str | None, str]:
         if b.item_from == mapping.ITEM_FROM_FIXED:
             code = b.solution_code or b.item_expr
+            if not code and b.live_only:
+                # 라이브 전용은 항목이 없어도 된다(위 api/bindings 의 같은 판단 참조).
+                # 화면은 박스만 쓰고, 이 신호는 어차피 적재되지 않는다.
+                return "", ""
             if code in self._solution_codes:
                 return code, ""
             return None, f"탐지 항목 '{code}' 이(가) 등록되어 있지 않음"
