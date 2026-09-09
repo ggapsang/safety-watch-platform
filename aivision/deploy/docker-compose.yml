@@ -153,13 +153,12 @@ services:
   # 그 화면을 플랫폼에 넣으면 코어가 YOLO 를 알게 되므로(매니페스토 2번) 모듈이 직접
   # 띄우고, 플랫폼은 등록된 endpoint 를 탭으로 감싸기만 한다.
   #
-  # profile 로 묶어 기본은 꺼 둔다. 모델이 없는 환경에서 켜 두면 혼란만 준다.
-  #   docker compose --profile yolo up -d --build
+  # 기본으로 뜬다. 모델이 없으면 dry-run 으로 내려앉고 학습 화면(11990)만 쓴다 —
+  # 꺼 두면 클론한 쪽에서 '모듈이 없다' 로 보인다. 쓰지 않으려면 stop 하면 된다.
   #
   # GPU 로 학습하려면 CUDA 판 torch 로 빌드하고 아래 deploy 블록의 주석을 푼다.
   #   docker compose build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 mod-yolo
   mod-yolo:
-    profiles: ["yolo"]
     build:
       # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
       context: ../modules
@@ -231,7 +230,6 @@ services:
   # 메타데이터 트랙에서 읽어 화면에만 그린다. **이벤트를 만들지 않는다** —
   # 사람이 서 있는 동안 초당 여러 번 나오는 판독을 이벤트로 쌓으면 DB 가 무너진다.
   mod-camera-meta:
-    profiles: ["meta"]
     build:
       # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
       context: ../modules
