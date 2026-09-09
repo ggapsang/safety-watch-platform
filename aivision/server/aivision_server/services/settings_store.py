@@ -42,3 +42,18 @@ async def get_runtime(session: AsyncSession) -> dict[str, Any]:
 async def all_settings(session: AsyncSession) -> dict[str, Any]:
     rows = (await session.execute(select(Setting))).scalars().all()
     return {r.key: r.value for r in rows}
+
+
+async def replace_value(session: AsyncSession, key: str, value: dict) -> dict:
+    """통째로 갈아 끼운다. set_value 와 달리 병합하지 않는다 — 지운 키는 지워진다.
+
+    설정 파일 편집기가 쓴다. 편집기는 '보이는 것이 곧 전부' 라야 하는데 병합하면
+    화면에서 지운 항목이 DB 에 남아 다음 조회에 되살아난다.
+    """
+    row = await session.get(Setting, key)
+    if row is None:
+        session.add(Setting(key=key, value=value))
+    else:
+        row.value = value
+    await session.flush()
+    return value

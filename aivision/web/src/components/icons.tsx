@@ -93,3 +93,11 @@ export const IconDownload = ({ size = 14, className }: IconProps) => (
     <path d="M8 2.5v7.5M4.5 7L8 10.5 11.5 7M2.5 13h11" />
   </svg>
 );
+
+/** 설정 파일 — 접힌 모서리가 있는 문서 */
+export const IconFile = ({ size = 15, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M9 1.75H4.25A1.25 1.25 0 003 3v10a1.25 1.25 0 001.25 1.25h7.5A1.25 1.25 0 0013 13V5.75z" />
+    <path d="M9 1.75v4h4M5.5 8.5h5M5.5 11h3.5" />
+  </svg>
+);

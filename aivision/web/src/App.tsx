@@ -13,6 +13,9 @@ import { ModuleFrame } from "./pages/ModuleFrame";
 const MqttLog = lazy(() => import("./pages/MqttLog").then((m) => ({ default: m.MqttLog })));
 const Admin = lazy(() => import("./pages/Admin").then((m) => ({ default: m.Admin })));
 const Stats = lazy(() => import("./pages/Stats").then((m) => ({ default: m.Stats })));
+const ConfigFile = lazy(() =>
+  import("./pages/ConfigFile").then((m) => ({ default: m.ConfigFile })),
+);
 
 const Loading = () => (
   <div className="py-24 text-center text-[13px] text-muted-soft">불러오는 중…</div>
@@ -32,6 +35,7 @@ export default function App() {
           <Route path="/stats" element={<Stats />} />
           <Route path="/mqtt" element={<MqttLog />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/config" element={<ConfigFile />} />
           {/* 화면을 가진 모듈이면 무엇이든 여기로 들어온다. 코어는 안을 모른다. */}
           <Route path="/modules/:moduleId" element={<ModuleFrame />} />
           <Route path="*" element={<Dashboard />} />

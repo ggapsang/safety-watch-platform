@@ -33,7 +33,7 @@ def _layout() -> str:
 @dataclass
 class Config(BaseConfig):
     module_id: str = "yolo-server"
-    module_name: str = "서버 YOLO"
+    module_name: str = "객체감지"
 
     # ── 모델 ──
     model_path: Path | None = None

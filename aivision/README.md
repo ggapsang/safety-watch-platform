@@ -68,7 +68,7 @@ docker compose up -d --build
 | MQTT WebSocket (브라우저) | `<서버IP>:11881` | 'MQTT 로그' 화면 직결 구독 |
 | PostgreSQL | `<서버IP>:11882` | 분석·점검용 직접 조회 |
 | **RTSP (분석 모듈)** | `rtsp://<서버IP>:8554/cam/{id}` | 모듈이 영상을 가져가는 곳 |
-| 서버 YOLO 모듈 화면 | `<서버IP>:11990` | 학습·모델 관리. 플랫폼 탭에서도 열립니다 |
+| 객체감지 모듈 화면 | `<서버IP>:11990` | 학습·모델 관리. 플랫폼 탭에서도 열립니다 |
 | 미디어 WebRTC / HLS | `<서버IP>:11884` / `:11885` | 브라우저 저지연 재생(현재 미사용) |
 
 > 8080·5432 는 다른 프로그램과 자주 부딪혀 118xx 대역으로 옮겼습니다.
@@ -85,9 +85,13 @@ docker compose up -d --build
 
 ## 컨테이너 구성
 
-서비스 이름은 **없으면 플랫폼이 안 도는 것**과 **있어도 되고 없어도 되는 것**으로 가릅니다.
-`docker compose ps` 목록만 보고도 무엇을 꺼도 되는지 알 수 있어야 하기 때문입니다.
-이 경계는 compose profile 의 경계와 정확히 같습니다.
+서비스 이름은 **없으면 플랫폼이 안 도는 것**(`base-*`)과 **있어도 되고 없어도 되는 것**
+(`mod-*`)으로 가릅니다. `docker compose ps` 목록만 보고도 무엇을 꺼도 되는지 알 수 있어야
+하기 때문입니다.
+
+**전부 기본으로 뜹니다.** 예전에는 `mod-*` 를 compose profile 로 묶어 꺼 두었는데, 그러면
+클론한 쪽에서는 `up -d` 를 해도 모듈이 없어 '기능이 빠졌다' 로 보입니다. 쓰지 않을 모듈은
+`docker compose stop mod-yolo` 처럼 내리면 됩니다.
 
 | 서비스 | 무엇 | 왜 필요한가 |
 |---|---|---|
@@ -95,13 +99,12 @@ docker compose up -d --build
 | `base-db` | PostgreSQL | 카메라·바인딩·이벤트·설정. 유일한 진실의 원천 |
 | `base-broker` | mosquitto | 카메라와 모듈이 판정을 실어 보내는 전선 |
 | `base-media` | MediaMTX | 카메라에서 한 번만 당겨 여러 소비자에게 나눠 줍니다(fan-out) + 녹화·재생 |
-| `mod-camera-meta` | 카메라 메타데이터 모듈 | 카메라가 이미 만든 박스를 읽어 화면에 그립니다 (`--profile meta`) |
-| `mod-yolo` | 서버 YOLO 모듈 | 우리가 직접 학습하고 추론합니다. 자기 화면을 11990 에 띄웁니다 (`--profile yolo`) |
+| `mod-camera-meta` | 카메라 메타데이터 모듈 | 카메라가 이미 만든 박스를 읽어 화면에 그립니다 |
+| `mod-yolo` | 객체감지 모듈 | 우리가 직접 학습하고 추론합니다. 자기 화면을 11990 에 띄웁니다 |
 
 ```bash
-docker compose up -d --build                              # base-* 만
-docker compose --profile meta up -d --build               # 메타데이터 모듈까지
-docker compose --profile meta --profile yolo up -d --build   # 전부
+docker compose up -d --build          # base-* 와 mod-* 전부
+docker compose stop mod-yolo          # 쓰지 않을 모듈만 내립니다
 ```
 
 **모듈이 별도 컨테이너인 이유**는 매니페스토 1번입니다. 코어 안에 두면 우리 모듈만 계약을
@@ -230,21 +233,24 @@ API 응답에는 여전히 싣지 않습니다(`has_password` 로만 알립니�
 - **인바운드 바인딩** — 어떤 토픽·페이로드든 코드 없이 이벤트로 변환 (MQTT · HTTP)
 - **아웃바운드** — 이벤트를 MQTT 로 내보냄. 수신 측이 죽어도 잃지 않고 재시도
 - **분석 모듈 레지스트리** — 등록 · 카메라 할당 · 일감 수령 · heartbeat
-- **서버 YOLO 사이드카** — 별도 컨테이너로 도는 모듈 (모델 없이 dry-run 가능)
+- **객체감지 모듈** — 별도 컨테이너로 도는 모듈 (모델 없이 dry-run 가능)
 - **카메라 메타데이터 모듈** — 카메라가 이미 만든 박스를 읽어 화면에 그림 (모델 불필요)
 - **라이브 박스 오버레이** — 영상 위에 실시간 박스 (이벤트로는 쌓지 않음)
 - **모듈 SDK** — 등록·일감 폴링·발행·워커 수명주기·전이 판정을 공용으로 뽑아 두 모듈이
   같이 씁니다. 모듈이 구현할 것은 `Source` 하나입니다
 - MQTT 원문 수신 ('MQTT 로그' 화면), 이벤트 적재·조회, CSV 내려받기
+- **설정 파일** — 탐지 항목·바인딩·운영 설정을 저장소에 커밋하고, 화면에서 JSON 으로
+  바로 고칩니다. 클론하면 같은 배선으로 뜹니다
 
 아직 비어 있는 것:
 
-- **탐지 항목(무엇을 이벤트로 볼지)** — 정해지지 않아 기본값을 심지 않았습니다.
-  그럴듯한 항목을 미리 넣어 두면 현장과 맞지 않는 것을 나중에 지우는 일부터 해야 합니다.
+- **탐지 항목(무엇을 이벤트로 볼지)** — 카메라 엣지와 이미 약속한 `INVASION` 하나만
+  들어 있습니다. 그럴듯한 항목(화재·PPE 같은)을 미리 채우면 현장과 맞지 않는 것을
+  나중에 지우는 일부터 해야 하므로, 정해지는 대로 설정 파일에 더합니다.
 - **심각도·처리 상태** — 같은 이유로 넣지 않았습니다. 컬럼도 만들지 않았습니다.
 - **통계 화면** — 조회 조건과 골격만 있고 지표는 비어 있습니다. 서버의 `/api/stats` 는
   시계열·카메라별 집계를 이미 내려주므로 지표가 정해지면 붙이기만 하면 됩니다.
-- **탐지 모델** — 사이드카의 배관은 다 돌지만 모델 파일이 아직 없습니다. 무엇을 판독할지
+- **탐지 모델** — 객체감지 모듈의 배관은 다 돌지만 모델 파일이 아직 없습니다. 무엇을 판독할지
   정해지면 `.onnx` 를 `aivision/models/` 에 넣고 `CLASS_MAP` 만 채우면 됩니다.
 - **아웃바운드의 다른 종류** — 웹훅 · 알림 · PLC. `kind` 를 늘리고 sender 함수를 추가하면
   붙습니다(코어는 고치지 않습니다).
@@ -361,7 +367,7 @@ curl -X POST localhost:11880/api/ingest -H 'Content-Type: application/json'   -d
 
 ```bash
 cd aivision/deploy
-docker compose --profile meta up -d --build mod-camera-meta
+docker compose up -d --build mod-camera-meta
 docker compose logs -f mod-camera-meta
 ```
 
@@ -389,7 +395,7 @@ docker compose logs -f mod-camera-meta
 cd aivision/modules/onvif_meta && python tests.py    # 카메라 없이 파서 검증
 ```
 
-## 서버 YOLO 모듈 — 학습부터 추론까지
+## 객체감지 모듈 — 학습부터 추론까지
 
 `aivision/modules/yolo/` 에 있습니다. **코어 코드가 아니라 모듈 계약의 사용자**입니다.
 다른 모듈과 다른 점이 둘 있습니다 — **학습까지 여기서 돌리고**, 그래서 **자기 화면을
@@ -402,7 +408,7 @@ cd aivision/modules/onvif_meta && python tests.py    # 카메라 없이 파서 �
 
 ```bash
 cd aivision/deploy
-docker compose --profile yolo up -d --build      # 기본은 꺼져 있습니다
+docker compose up -d --build mod-yolo
 docker compose logs -f mod-yolo
 ```
 
@@ -486,6 +492,124 @@ cd aivision/modules/yolo && python tests.py
 순간만** 남깁니다 — 발생은 즉시(늦추면 안전관리에서는 그게 사고입니다), 해제는 `hold_sec`
 동안 한 번도 보이지 않은 뒤입니다. 한두 프레임 놓친 것으로 해제하면 화면이 깜빡입니다.
 
+## 설정은 파일에 두고 커밋합니다
+
+`aivision/deploy/config/platform.json` 이 **설정의 원본**입니다. DB 는 그 사본입니다.
+
+가르는 기준은 '사람이 정한 것인가, 기계가 쌓은 것인가' 입니다.
+
+| | 원본 | 크기 | 커밋 |
+|---|---|---|---|
+| 탐지 항목 · 인바운드 바인딩 · 운영 설정 | `deploy/config/platform.json` | 몇 KB, 트래픽과 무관 | O |
+| 이벤트 · 박스 · 원문 로그 · 녹화 · 카메라 접속정보 | DB | GB 로 커집니다 | X |
+
+**왜 이렇게 갈랐나.** 예전에는 배선이 DB 에만 있었습니다. 개발 PC 화면에서 만들고 확인했으니
+된다고 판단했는데, 클론한 쪽은 빈 DB 로 떠서 박스도 안 그려지고 이벤트도 안 걸렸습니다.
+코드는 다 있는데 아무것도 동작하지 않는 상태였습니다. 게다가 DB 는 이벤트가 쌓여 계속 커지는
+물건이라 저장소에 올릴 수 없으니, 설정을 그 안에 두면 **커질수록 꺼낼 방법이 없어집니다.**
+
+**DB 에서 아주 빼지 않은 이유**는 매니페스토 2번입니다. 어드민이 토픽만 알면 코드 없이 새
+소스를 받아들일 수 있어야 하므로 화면이 바인딩을 실시간으로 고칠 수 있어야 하고, 조회할
+때마다 파일을 읽을 수는 없습니다. 그래서 파일이 원본, DB 가 사본입니다.
+
+```
+기동할 때      파일 -> DB    없는 것만 만듭니다. 화면에서 고친 값을 되돌리지 않습니다
+화면에서 저장   DB  -> 파일   설정 파일 화면의 [저장]. 그 파일을 커밋하면 됩니다
+```
+
+카메라 자체(IP·비밀번호)는 파일에 넣지 않습니다. 현장마다 다르고 저장소에 들어가서는 안
+됩니다. 다만 `camera_from=fixed` 인 바인딩이 가리키는 `camera_id` 는 담습니다 — 없으면 그
+바인딩을 파일로 온전히 표현할 수 없습니다. 환경을 옮겨 번호가 안 맞으면 실패시키지 않고
+비운 채 꺼 둡니다.
+
+### 파일 구조
+
+```jsonc
+{
+  "version": 1,
+  "solutions": [ ... ],   // 탐지 항목 — 무엇을 이벤트로 볼 것인가
+  "bindings":  [ ... ],   // 인바운드 바인딩 — 들어온 메시지를 어떻게 옮길 것인가
+  "runtime":   { ... }    // 운영 설정. 비우면 compose 환경변수 기본값을 씁니다
+}
+```
+
+`solutions` 한 건:
+
+| 필드 | 내용 |
+|---|---|
+| `code` | 항목 코드. 이벤트·통계·차트가 전부 이 코드로 묶이고 바인딩이 이것을 가리킵니다 |
+| `name` · `short_name` · `description` | 화면에 쓰는 이름들 |
+| `event_type` | 이벤트 목록에 찍히는 표시명 |
+| `color` · `sort_order` · `enabled` | 차트 색 · 정렬 순서 · 끔/켬 |
+
+`bindings` 한 건은 네 가지를 답합니다.
+
+| 답하는 것 | 필드 |
+|---|---|
+| **무엇이 걸리나** | `transport`(mqtt\|http) · `topic_pattern` · `payload_filter` · `payload_profile`(raw\|onvif) · `priority` · `enabled` · `live_only` |
+| **어느 카메라인가** | `camera_from`(topic_mac\|topic_segment\|payload\|fixed) · `camera_expr` · `camera_id` |
+| **어떤 항목인가** | `item_from`(fixed\|payload) · `solution_code` · `item_expr` |
+| **발생인가 해제인가** | `state_expr`(비우면 수신 자체가 발생) · `state_active` · `state_inactive` |
+
+부가 추출은 `module_expr`(무엇이 판정했나) · `confidence_expr` · `ts_expr` · `boxes_expr` +
+`boxes_format`(`xyxy_norm` \| `xyxy_px` \| `xywh_px` \| `cxcywh_norm`) 입니다.
+
+`live_only` 가 중요합니다. 켜면 이벤트로 쌓지 않고 화면 박스로만 흘립니다 — 사람이 서 있는
+동안 초당 여러 번 나오는 판독을 적재하면 DB 가 무너집니다.
+
+표현식 문법은 넷뿐입니다. 어드민 화면에서 설명할 수 있어야 하므로 일부러 좁게 잡았습니다.
+
+```
+$.a.b.c     페이로드에서 꺼냅니다
+$topic[2]   토픽을 / 로 자른 뒤 n 번째 조각 (0 부터)
+$mac        토픽 앞머리의 MAC 주소
+$topic      토픽 전체
+그 밖의 값   리터럴 문자열
+```
+
+`runtime` 에 넣을 수 있는 키:
+
+| 키 | 내용 |
+|---|---|
+| `event_dedup_sec` | 같은 (카메라·항목) 이벤트 중복 억제 창. 의미 수준 · DB 로 판단 |
+| `inbound_min_interval_sec` | 완충장치. 같은 메시지를 문 앞에서 버리는 간격. 전송 수준 · 메모리로 판단 |
+| `mqtt_log_mode` · `mqtt_log_topics` · `mqtt_log_retention_days` | 수신 원문 적재 정책 (기본 끔) |
+| `record_max_gb` | 상시 녹화 총 용량 상한 |
+| `snapshot_on_event` | 이벤트 때 스냅샷을 찍을지 |
+
+### 기본으로 들어 있는 배선
+
+| 이름 | 토픽 | 하는 일 |
+|---|---|---|
+| 라이브 박스 | `aivision/live/+` | 화면에 박스만 그립니다. 적재하지 않습니다 |
+| 모듈 판정 | `aivision/detect/#` | 모듈이 올린 판정 -> 이벤트 |
+| invasion | `invasion` | 카메라 엣지의 침입 알림 -> `INVASION` 이벤트 |
+
+`invasion` 은 페이로드가 고정 문구(`someone invasion`)라 어느 카메라인지 알 단서가 없습니다.
+카메라가 1대면 자동으로 붙고, 여러 대면 꺼진 채로 생기니 화면에서 카메라를 고르고 켜세요.
+
+### 화면에서 편집하기
+
+**운영 → 설정 파일**. 왼쪽에 각 필드 설명, 오른쪽에 파일 그 자체가 JSON 편집기로 뜹니다.
+표가 아니라 편집기인 이유는, 이 화면이 고치는 것이 **저장소에 커밋할 파일 그 자체**이기
+때문입니다 — 화면에서 본 것과 커밋할 것이 글자 그대로 같아야 무엇을 커밋하는지 알 수 있습니다.
+
+[저장]을 누르면 DB 와 파일을 한 번에 맞춥니다(`Ctrl+S` 도 됩니다). 바인딩은 **보이는 것이 곧
+전부**라 지운 줄은 지워집니다. 다만 **탐지 항목은 여기서 지울 수 없습니다** — 항목을 지우면
+그 항목의 이벤트가 함께 지워지므로(FK CASCADE), JSON 에서 몇 글자 지운 것이 몇 만 건을 날리는
+일이 되어서는 안 됩니다. 정말 지울 거라면 관리자 화면에서 결과를 보고 지웁니다.
+
+API 로도 됩니다.
+
+```bash
+curl localhost:11880/api/config                      # 지금 설정을 그대로
+curl -X PUT localhost:11880/api/config -d @cfg.json  # 반영하고 파일에도 씁니다
+curl -X POST localhost:11880/api/config/save         # DB 를 파일로 되뽑기만
+```
+
+설정 파일이 깨져 있어도 서버는 뜹니다. 경고만 내고 배선 없이 기동합니다 — 파일 하나 때문에
+서버가 못 뜨면 현장에서 손을 쓸 수 없습니다.
+
 ## 새 소스를 받아들일 때 — 인바운드 바인딩
 
 무엇을 이벤트로 볼지는 코드가 아니라 **DB** 에 있습니다.
@@ -541,6 +665,7 @@ aivision/
 ├─ deploy/            운영 스택 정의
 │  ├─ docker-compose.yml   base-* / mod-* 서비스
 │  ├─ Dockerfile           base-app 이미지 (프론트 빌드 -> 파이썬 런타임 2단계)
+│  ├─ config/platform.json  커밋하는 설정 — 탐지 항목·바인딩·운영 설정
 │  ├─ mediamtx/            미디어 서버 설정
 │  ├─ mosquitto/           브로커 설정
 │  └─ .env                 (compose 가 자기 디렉터리의 .env 를 자동으로 읽습니다)
@@ -550,6 +675,7 @@ aivision/
 │  ├─ tests/smoke.py      브로커·도커 없이 도는 스모크 (SQLite)
 │  └─ aivision_server/
 │     ├─ models.py            DB 스키마 — 카메라·탐지항목·바인딩·이벤트·녹화·설정
+│     ├─ seed.py              기동할 때 설정 파일을 DB 로 붓습니다
 │     ├─ media/               미디어 백엔드 계약 + MediaMTX 구현 (fan-out·녹화·재생)
 │     ├─ streaming/           프레임 워커 · MJPEG 재송출
 │     ├─ mqtt/mapping.py      인바운드 매핑 — 어떤 모양의 메시지든 정규형으로
@@ -559,6 +685,7 @@ aivision/
 │     │  ├─ events.py         이벤트 승격 (중복억제·스냅샷·적재·통보)
 │     │  ├─ recording.py      녹화 정책 · 용량 상한 · 이벤트 클립
 │     │  ├─ outbound.py       아웃바운드 outbox — 조건 매칭·전송·재시도·만료
+│     │  ├─ config_file.py    설정 파일 <-> DB (커밋할 것과 못 할 것을 가릅니다)
 │     │  ├─ raw_log.py        수신 원문 적재 정책 (기본 끔)
 │     │  └─ bus.py            브라우저 푸시 버스
 │     └─ api/                 REST · WebSocket 라우터
@@ -572,7 +699,7 @@ aivision/
 │  ├─ _sdk/               공용 배관 — 등록·일감 폴링·발행·워커 수명주기·전이 판정
 │  │                      모듈이 구현할 것은 Source 하나뿐입니다
 │  ├─ onvif_meta/         카메라 메타데이터 -> 라이브 박스 (모델 불필요)
-│  └─ yolo/               서버 YOLO — 학습·추론·자기 화면(11990)
+│  └─ yolo/               객체감지(YOLO) — 학습·추론·자기 화면(11990)
 │     ├─ inference.py       추론 (전처리 -> 백엔드 -> 후처리)
 │     ├─ training.py        학습·내보내기를 자식 프로세스로 실행
 │     ├─ api.py · web/      모듈이 직접 띄우는 화면과 API
@@ -580,7 +707,7 @@ aivision/
 │
 ├─ models/            모델 파일을 넣는 곳 (mod-yolo 에 /models 로 마운트)
 └─ web/               React + Vite + Tailwind v4 (빌드 결과가 base-app 이미지로 들어갑니다)
-   ├─ src/pages/          종합 현황 · 카메라 · 이벤트 · 통계 · MQTT 로그 · 관리자
+   ├─ src/pages/          종합 현황 · 카메라 · 이벤트 · 통계 · MQTT 로그 · 설정 파일 · 관리자
    ├─ src/components/     LiveVideo(박스 오버레이) · CameraStrip · Shell(사이드바)
    └─ src/lib/            api · hooks · live(WebSocket 단일 연결) · types
 ```
@@ -591,10 +718,10 @@ aivision/
 ### 설계상 지켜야 할 경계
 
 **1. 탐지 소스는 갈아 끼울 수 있어야 합니다.**
-판정이 카메라 엣지(MQTT)에서 오든, 서버 YOLO 사이드카에서 오든, 나중에 외부 서비스에서
+판정이 카메라 엣지(MQTT)에서 오든, 객체감지 모듈에서 오든, 나중에 외부 서비스에서
 오든 `DetectionSignal` 이라는 같은 모양으로 들어오고 그 뒤 처리는 완전히 동일합니다.
 추론기를 붙이는 일은 소스를 추가하는 일이 아니라 **모듈을 등록하는 일**입니다 —
-서버 YOLO 도 코어 밖에서 같은 문(인바운드 바인딩)을 지납니다.
+객체감지 모듈도 코어 밖에서 같은 문(인바운드 바인딩)을 지납니다.
 
 **2. 영상과 박스는 다른 채널로 갑니다.**
 서버는 프레임에 바운딩 박스를 굽지 않습니다. 영상은 MJPEG(`<img>`), 박스는 WebSocket JSON 으로
@@ -664,6 +791,6 @@ PYTHONPATH=. .venv/Scripts/python tests/smoke.py
 - **모델 파일이 없으면 사이드카는 dry-run 으로 내려앉습니다.** 컨테이너를 죽여 재시작을
   반복하는 것보다 배관이 도는 것을 보여 주는 편이 낫다고 판단했습니다. 로그에 경고가 남습니다.
 - **카메라 엣지(ONVIF) 이벤트에는 박스 좌표가 없습니다.** 화면·DB·API 는 좌표가 들어오는
-  순간 동작하도록 준비돼 있고, 서버 YOLO 사이드카는 좌표를 함께 발행합니다.
+  순간 동작하도록 준비돼 있고, 객체감지 모듈는 좌표를 함께 발행합니다.
 - **카메라를 삭제하면 그 카메라의 이벤트 이력도 함께 지워집니다.** 이력을 남기려면 삭제 대신
   '사용 안 함'으로 바꾸십시오.

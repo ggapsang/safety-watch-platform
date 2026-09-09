@@ -16,6 +16,9 @@ os.environ["MQTT_HOST"] = "127.0.0.1"
 os.environ["SNAPSHOT_DIR"] = "./.smoke-snap"
 os.environ["RECORD_DIR"] = "./.smoke-rec"
 os.environ["TZ"] = "Asia/Seoul"
+# 설정 파일은 이 테스트가 직접 다룬다. 배포용 파일을 붓고 시작하면 '기본 배선이 있는 상태'
+# 를 검사하는 셈이라, 바인딩이 하나도 없을 때의 동작을 확인할 수 없다.
+os.environ["CONFIG_FILE"] = "./.smoke-config.json"
 
 db = pathlib.Path("./.smoke.db")
 if db.exists():
@@ -23,6 +26,7 @@ if db.exists():
 import shutil                                        # noqa: E402
 
 shutil.rmtree("./.smoke-rec", ignore_errors=True)
+pathlib.Path("./.smoke-config.json").unlink(missing_ok=True)
 
 from httpx import ASGITransport, AsyncClient          # noqa: E402
 

@@ -23,6 +23,8 @@ import type {
   Summary,
   SystemStatus,
   AnalyticsModule,
+  PlatformConfig,
+  ConfigSaveResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -127,6 +129,11 @@ export const api = {
   settings: () => request<AppSettings>("/api/settings"),
   saveSettings: (body: Partial<AppSettings>) =>
     request<AppSettings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
+  /** 설정 파일(탐지 항목·바인딩·운영 설정)을 그대로 읽는다. 편집 화면이 쓴다. */
+  config: () => request<PlatformConfig>("/api/config"),
+  /** 편집한 설정을 반영하고 파일에도 쓴다. */
+  saveConfig: (body: PlatformConfig) =>
+    request<ConfigSaveResult>("/api/config", { method: "PUT", body: JSON.stringify(body) }),
   system: () => request<SystemStatus>("/api/system"),
   modules: () => request<AnalyticsModule[]>("/api/modules"),
   /** 상시 녹화 용량 정리를 지금 실행 (주기 작업을 기다리지 않고 확인할 때) */

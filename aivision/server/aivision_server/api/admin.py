@@ -192,3 +192,34 @@ async def config_save(session: AsyncSession = Depends(get_session)) -> dict:
                             detail=f"설정 파일에 쓰지 못했습니다 ({path}): {exc}") from exc
     return {"path": str(path), "solutions": len(data["solutions"]),
             "bindings": len(data["bindings"])}
+
+
+@router.put("/config")
+async def config_put(body: dict, session: AsyncSession = Depends(get_session)) -> dict:
+    """편집한 설정을 반영하고 파일에도 쓴다.
+
+    화면의 JSON 편집기가 부른다. DB 와 파일을 한 번에 맞춘다 — 둘이 갈라지면
+    다음 기동에서 어느 쪽이 이기는지 사람이 알 수 없게 된다.
+
+    파일 쓰기가 실패해도 DB 반영은 되돌리지 않는다. 되돌리면 방금 화면에서 고친
+    것이 사라지는데, 실패의 실제 이유는 대개 '마운트를 안 했다' 라서 그 벌로 작업을
+    날릴 이유가 없다. 대신 응답에 저장 못 했다고 분명히 적는다.
+    """
+    from .bindings import _after_change, _validate      # 순환 import 를 피해 지연 로드
+
+    try:
+        data = await config_file.replace(session, body, validate=_validate)
+    except config_file.ConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await _after_change()
+    await throttle.reload()
+    await raw_log.reload()
+
+    path = get_settings().config_file
+    saved, note = True, ""
+    try:
+        await config_file.save(session, path)
+    except OSError as exc:
+        saved, note = False, f"설정은 반영했지만 파일에 쓰지 못했습니다 ({path}): {exc}"
+    return {"config": data, "path": str(path), "saved": saved, "note": note}

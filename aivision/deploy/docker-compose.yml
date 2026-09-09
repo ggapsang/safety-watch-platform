@@ -15,7 +15,8 @@
 #                                    [브라우저] --WebSocket/REST
 #
 # 사용: docker compose -f deploy/docker-compose.yml up -d --build
-#      docker compose --profile meta --profile yolo up -d      (모듈까지 함께)
+#      base-* 도 mod-* 도 전부 뜬다. 모듈을 쓰지 않으려면 stop 하면 된다 —
+#      기본으로 꺼 두면 클론한 쪽에서 '기능이 없다' 로 보인다.
 name: aivision
 
 services:
@@ -191,7 +192,7 @@ services:
       MQTT_HOST: base-broker
       MQTT_PORT: "1883"
       MODULE_ID: ${YOLO_MODULE_ID:-yolo-server}
-      MODULE_NAME: ${YOLO_MODULE_NAME:-서버 YOLO}
+      MODULE_NAME: ${YOLO_MODULE_NAME:-객체감지}
       # 모델 파일 경로(컨테이너 안). 없으면 모듈이 dry-run 으로 내려앉는다.
       MODEL_PATH: ${YOLO_MODEL_PATH:-/models/best.onnx}
       # 모델 클래스 -> 플랫폼 탐지 항목 코드. 모델이 바뀌면 이것만 바꾼다.

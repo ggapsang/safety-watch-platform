@@ -308,3 +308,24 @@ export type PushMessage =
       kind: "live-boxes";
       data: { camera_id: number; item: string; ts: string; boxes: Box[] };
     };
+
+/** 설정 파일(deploy/config/platform.json)의 내용.
+ *
+ * 안을 타입으로 못 박지 않는다. 이 화면은 **JSON 편집기**이고, 무엇이 유효한지는
+ * 서버가 판정한다. 프런트가 모양을 아는 척하면 서버에 필드가 하나 늘 때마다
+ * 편집기가 그것을 지워 버린다. */
+export interface PlatformConfig {
+  version: number;
+  solutions: Record<string, unknown>[];
+  bindings: Record<string, unknown>[];
+  runtime: Record<string, unknown>;
+}
+
+export interface ConfigSaveResult {
+  config: PlatformConfig;
+  /** 서버가 쓴 파일 경로. 이 파일을 커밋하면 된다 */
+  path: string;
+  /** 파일까지 썼는가. false 여도 설정 자체는 반영되어 있다 */
+  saved: boolean;
+  note: string;
+}

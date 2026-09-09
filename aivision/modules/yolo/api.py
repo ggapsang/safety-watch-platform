@@ -51,7 +51,7 @@ class PublishRequest(BaseModel):
 
 def create_app(cfg, trainer: training.Trainer, runner_status) -> FastAPI:
     """`runner_status` 는 추론 워커의 상태를 돌려주는 함수(SDK Runner.status)."""
-    app = FastAPI(title="AI Vision — 서버 YOLO 모듈", docs_url="/api/docs",
+    app = FastAPI(title="AI Vision — 객체감지 모듈", docs_url="/api/docs",
                   openapi_url="/api/openapi.json")
 
     models_dir = Path(cfg.models_dir)

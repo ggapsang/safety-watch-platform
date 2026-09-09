@@ -10,6 +10,7 @@ import {
   IconCamera,
   IconChart,
   IconDashboard,
+  IconFile,
   IconList,
   IconModule,
   IconSettings,
@@ -54,6 +55,12 @@ const GROUPS: { group: string; items: NavItem[] }[] = [
     items: [
       { to: "/admin", label: "관리자", desc: "카메라 등록 · 시스템 상태", icon: <IconSettings /> },
       { to: "/mqtt", label: "MQTT 로그", desc: "실시간 MQTT 수신 메시지", icon: <IconSignal /> },
+      {
+        to: "/config",
+        label: "설정 파일",
+        desc: "탐지 항목 · 바인딩 · 운영 설정",
+        icon: <IconFile />,
+      },
     ],
   },
 ];

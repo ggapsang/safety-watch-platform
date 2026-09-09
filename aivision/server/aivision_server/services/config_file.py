@@ -22,7 +22,10 @@
 않는다 — 운영 중에 화면에서 고친 값을 기동할 때마다 되돌리면 안 된다. 파일 쪽이
 맞다고 확신할 때는 화면에서 지우고 다시 올리면 된다.
 
-카메라는 여기 넣지 않는다. IP·비밀번호는 현장마다 다르고 저장소에 들어가서는 안 된다.
+카메라 자체(IP·비밀번호)는 여기 넣지 않는다. 현장마다 다르고 저장소에 들어가서는 안 된다.
+다만 `camera_from=fixed` 바인딩이 가리키는 `camera_id` 는 담는다 — 없으면 그 바인딩을
+파일로 온전히 표현할 수 없다. 환경을 옮기면 그 번호가 안 맞을 수 있는데, 없는 번호면
+실패시키지 않고 비운 채 꺼 둔다. 화면에서 카메라를 고르고 켜면 된다.
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ VERSION = 1
 _BINDING_FIELDS = (
     "name", "enabled", "transport", "payload_profile", "priority", "live_only",
     "topic_pattern", "payload_filter",
-    "camera_from", "camera_expr",
+    "camera_from", "camera_expr", "camera_id",
     "item_from", "item_expr", "solution_code",
     "state_expr", "state_active", "state_inactive",
     "module_expr", "confidence_expr", "ts_expr", "boxes_expr", "boxes_format",
@@ -107,10 +110,12 @@ async def apply(session: AsyncSession, path: Path) -> list[str]:
         row = {k: v for k, v in spec.items() if k in _BINDING_FIELDS}
         note = ""
         if row.get("camera_from") == "fixed":
-            row["camera_id"] = only_cam
-            if only_cam is None:
-                row["enabled"] = False
-                note = " (카메라 지정 필요 — 꺼 둠)"
+            wanted = row.get("camera_id")
+            if wanted not in cams:               # 없는 번호이거나 비어 있음
+                row["camera_id"] = only_cam
+                if only_cam is None:
+                    row["enabled"] = False
+                    note = " (카메라 지정 필요 — 꺼 둠)"
         session.add(InboundBinding(**row))
         made.append(f"바인딩 '{name}'{note}")
 
@@ -156,3 +161,90 @@ async def save(session: AsyncSession, path: Path) -> dict:
     log.info("설정을 %s 에 저장했습니다 (항목 %d · 바인딩 %d)",
              path, len(data["solutions"]), len(data["bindings"]))
     return data
+
+
+# ────────────────────────────────────────────────────────────── 통째로 바꾸기
+
+class ConfigError(Exception):
+    """설정을 받아들일 수 없다. 사람이 읽을 이유를 담는다."""
+
+
+async def replace(session: AsyncSession, data: dict,
+                  validate: Any | None = None) -> dict:
+    """편집한 설정을 통째로 반영한다. 화면의 JSON 편집기가 쓰는 길이다.
+
+    `apply` 와 규칙이 다르다. `apply` 는 기동할 때 도는 것이라 **없는 것만** 만들지만,
+    여기는 사람이 화면에서 보고 고쳐 누른 것이라 **보이는 것이 곧 진실**이어야 한다.
+    지운 줄은 지워져야 한다.
+
+    다만 탐지 항목은 지우지 않는다. 항목을 지우면 그 항목의 **이벤트가 함께 지워진다**
+    (FK CASCADE). JSON 에서 몇 글자 지운 것이 몇 만 건을 날리는 일이 되어서는 안 된다.
+    빠진 항목이 있으면 거부하고 무엇이 걸리는지 알려 준다 — 정말 지울 거라면 관리자
+    화면에서 결과를 보고 지우면 된다.
+
+    validate 는 바인딩 한 건을 검사하는 코루틴(api.bindings._validate)을 받는다.
+    검사 규칙을 두 벌로 갈라 두지 않으려고 넘겨받는다 — 이 계층은 API 를 모른다.
+    """
+    if not isinstance(data, dict):
+        raise ConfigError("최상위가 객체가 아닙니다")
+
+    incoming_sols = data.get("solutions")
+    incoming_binds = data.get("bindings")
+    if not isinstance(incoming_sols, list) or not isinstance(incoming_binds, list):
+        raise ConfigError("solutions 와 bindings 는 배열이어야 합니다")
+    runtime = data.get("runtime") or {}
+    if not isinstance(runtime, dict):
+        raise ConfigError("runtime 은 객체여야 합니다")
+
+    # ── 탐지 항목: 넣고 고치되 지우지 않는다 ──
+    codes: set[str] = set()
+    for spec in incoming_sols:
+        code = str(spec.get("code") or "").strip()
+        if not code:
+            raise ConfigError("탐지 항목에 code 가 없습니다")
+        codes.add(code)
+        fields = {k: v for k, v in spec.items() if k in _SOLUTION_FIELDS}
+        row = await session.get(Solution, code)
+        if row is None:
+            session.add(Solution(**fields))
+        else:
+            for k, v in fields.items():
+                setattr(row, k, v)
+
+    existing = (await session.execute(select(Solution.code))).scalars().all()
+    dropped = sorted(set(existing) - codes)
+    if dropped:
+        raise ConfigError(
+            "탐지 항목은 여기서 지울 수 없습니다: " + ", ".join(dropped)
+            + " — 항목을 지우면 그 항목의 이벤트도 함께 지워집니다. "
+              "관리자 화면에서 지우세요.")
+
+    # ── 바인딩: 보이는 것이 곧 전부 ──
+    names: set[str] = set()
+    for spec in incoming_binds:
+        name = str(spec.get("name") or "").strip()
+        if not name:
+            raise ConfigError("바인딩에 name 이 없습니다")
+        if name in names:
+            raise ConfigError(f"바인딩 이름이 겹칩니다: {name}")
+        names.add(name)
+        fields = {k: v for k, v in spec.items() if k in _BINDING_FIELDS}
+        fields["name"] = name
+        if validate is not None:
+            await validate(session, fields)
+        row = await session.scalar(select(InboundBinding).where(InboundBinding.name == name))
+        if row is None:
+            session.add(InboundBinding(**fields))
+        else:
+            for k, v in fields.items():
+                setattr(row, k, v)
+
+    for row in (await session.execute(select(InboundBinding))).scalars().all():
+        if row.name not in names:
+            await session.delete(row)
+
+    # ── 운영 설정: 통째로 갈아 끼운다(merge 가 아니다 — 지운 키는 지워져야 한다) ──
+    await store.replace_value(session, store.KEY_RUNTIME, runtime)
+
+    await session.commit()
+    return await export(session)
