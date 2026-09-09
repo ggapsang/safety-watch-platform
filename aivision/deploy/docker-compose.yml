@@ -128,11 +128,18 @@ services:
       # 위 마운트의 '호스트 쪽' 이름. 화면에 '지금 어디에 쌓이는가' 를 보여 주는 용도일 뿐
       # 서버는 이 값으로 아무것도 하지 않는다(컨테이너 안에서는 늘 /recordings 다).
       RECORD_LOCATION: ${RECORD_PATH:-recordings}
+      # 커밋할 수 있는 설정(탐지 항목·바인딩·운영 설정)의 원본. 기동할 때 DB 로 붓고,
+      # 화면에서 고친 뒤에는 /api/config/save 로 여기에 되쓴다. DB 는 이벤트가 쌓여
+      # GB 로 커지므로 저장소에 올릴 수 없다 — 그래서 설정만 파일로 따로 뺀다.
+      CONFIG_FILE: /config/platform.json
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "${HTTP_PORT:-11880}:8000"
     volumes:
       - media-data:/data
+      # 저장소 안의 설정 파일을 그대로 본다. 읽기 전용이 아닌 이유는 화면에서
+      # 고친 배선을 여기에 되써야 하기 때문이다(그 뒤 git 으로 커밋한다).
+      - ./config:/config
       # 미디어 서버와 같은 것을 본다. 쓰는 쪽은 미디어 서버 하나뿐이고
       # 코어는 용량을 재고 넘칠 때 오래된 것을 지우기 위해 붙는다.
       - ${RECORD_PATH:-recordings}:/recordings

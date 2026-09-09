@@ -21,7 +21,7 @@ from ..detection.registry import registry
 from ..media import backend as media_backend
 from ..models import MqttMessage, Solution
 from ..schemas import SettingsOut, SettingsPatch, SolutionOut, SolutionPatch
-from ..services import raw_log, throttle
+from ..services import config_file, raw_log, throttle
 from ..services import settings_store as store
 from ..streaming.manager import manager
 
@@ -166,3 +166,29 @@ async def mqtt_log(limit: int = 200, topic: str | None = None,
     rows = (await session.execute(stmt)).scalars().all()
     return [{"id": r.id, "ts": r.ts, "topic": r.topic, "payload": r.payload,
              "camera_id": r.camera_id, "matched": r.matched} for r in rows]
+
+
+# ────────────────────────────────────────────────────────────── 설정 파일
+
+@router.get("/config")
+async def config_export(session: AsyncSession = Depends(get_session)) -> dict:
+    """지금 DB 에 있는 배선을 파일에 담을 모양 그대로 돌려준다(쓰지는 않는다)."""
+    return await config_file.export(session)
+
+
+@router.post("/config/save")
+async def config_save(session: AsyncSession = Depends(get_session)) -> dict:
+    """DB 의 배선을 설정 파일에 쓴다. **그 파일을 커밋하면 된다.**
+
+    DB 는 이벤트가 쌓여 GB 로 커지므로 저장소에 올릴 수 없다. 그래서 화면에서 맞춘
+    배선을 저장소로 되가져오는 통로가 필요하다. 이것이 그 통로다.
+    """
+    path = get_settings().config_file
+    try:
+        data = await config_file.save(session, path)
+    except OSError as exc:
+        # 파일이 마운트되지 않았거나 읽기 전용일 때. 무엇을 고쳐야 하는지 알려 준다.
+        raise HTTPException(status_code=500,
+                            detail=f"설정 파일에 쓰지 못했습니다 ({path}): {exc}") from exc
+    return {"path": str(path), "solutions": len(data["solutions"]),
+            "bindings": len(data["bindings"])}

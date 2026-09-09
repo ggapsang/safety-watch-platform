@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     app_name: str = "AI Vision 통합관제 대시보드"
     log_level: str = "INFO"
     static_dir: Path = Path("static")          # 빌드된 SPA (Dockerfile 이 복사)
+    # 커밋할 수 있는 설정(탐지 항목·바인딩·운영 설정)이 사는 파일. 이것이 원본이고
+    # DB 는 사본이다 — DB 는 이벤트가 쌓여 GB 로 커지므로 저장소에 올릴 수 없다.
+    config_file: Path = Path("../deploy/config/platform.json")
 
     # ── DB ──────────────────────────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://aivision:aivision@localhost:5432/aivision"
