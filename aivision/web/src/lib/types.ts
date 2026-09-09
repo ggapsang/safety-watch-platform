@@ -230,6 +230,8 @@ export interface AppSettings {
   mqtt_log_retention_days: number;
   /** 상시 녹화 전체 용량 상한(GB). 0 이면 제한 없음 */
   record_max_gb: number;
+  /** 같은 메시지를 이 간격 안에서는 한 번만 처리 (초). 0 이면 끔 */
+  inbound_min_interval_sec: number;
   snapshot_on_event: boolean;
   event_dedup_sec: number;
 }

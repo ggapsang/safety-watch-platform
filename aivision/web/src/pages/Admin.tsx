@@ -483,6 +483,7 @@ function SettingsAdmin() {
   const qc = useQueryClient();
   const { data: settings } = useSettings();
   const [maxGb, setMaxGb] = useState(0);
+  const [minInterval, setMinInterval] = useState(1);
   const [logMode, setLogMode] = useState<LogMode>("off");
   const [logTopics, setLogTopics] = useState("");
   const [retention, setRetention] = useState(7);
@@ -494,6 +495,7 @@ function SettingsAdmin() {
     if (!settings) return;
     setRetention(settings.mqtt_log_retention_days);
     setMaxGb(settings.record_max_gb);
+    setMinInterval(settings.inbound_min_interval_sec);
     setLogMode(settings.mqtt_log_mode);
     setLogTopics(settings.mqtt_log_topics);
     setDedup(settings.event_dedup_sec);
@@ -504,6 +506,7 @@ function SettingsAdmin() {
     mutationFn: () =>
       api.saveSettings({
         record_max_gb: maxGb,
+        inbound_min_interval_sec: minInterval,
         mqtt_log_mode: logMode,
         mqtt_log_topics: logTopics,
         mqtt_log_retention_days: retention,
@@ -543,8 +546,23 @@ function SettingsAdmin() {
           <CardTitle title="이벤트 · 로그" desc="적재량과 중복 처리에 영향을 줍니다." />
           <div className="grid gap-4">
             <Field
+              label="같은 메시지 완충 (초)"
+              hint="토픽과 페이로드가 똑같은 메시지가 이 간격 안에 다시 오면 버립니다.
+                    바인딩도 DB 도 타지 않습니다. 빈 메시지를 연발하는 카메라를 막는 자리입니다.
+                    0 이면 끕니다. 내용이 매번 다른 라이브 박스는 영향을 받지 않습니다."
+            >
+              <Input
+                type="number"
+                min={0}
+                step={0.5}
+                value={minInterval}
+                onChange={(e) => setMinInterval(Math.max(0, Number(e.target.value) || 0))}
+              />
+            </Field>
+            <Field
               label="이벤트 중복 억제 (초)"
-              hint="같은 카메라·같은 항목의 연속 신호를 이 시간 안에서는 한 건으로 묶습니다."
+              hint="같은 카메라·같은 항목의 연속 신호를 이 시간 안에서는 한 건으로 묶습니다.
+                    위 완충이 '같은 메시지' 를 막는다면, 이것은 '같은 상황' 을 한 건으로 봅니다."
             >
               <Input
                 type="number"

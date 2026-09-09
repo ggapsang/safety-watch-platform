@@ -454,6 +454,8 @@ class SettingsOut(BaseModel):
     event_dedup_sec: float
     # 상시 녹화 전체 용량 상한(GB). 0 이면 제한 없음.
     record_max_gb: float
+    # 같은 메시지를 이 간격 안에서는 한 번만 처리한다. 0 이면 끔.
+    inbound_min_interval_sec: float
 
 
 class SettingsPatch(BaseModel):
@@ -463,3 +465,4 @@ class SettingsPatch(BaseModel):
     snapshot_on_event: bool | None = None
     event_dedup_sec: float | None = None
     record_max_gb: float | None = None
+    inbound_min_interval_sec: float | None = None

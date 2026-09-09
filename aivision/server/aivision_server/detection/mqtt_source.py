@@ -29,7 +29,7 @@ from ..config import get_settings
 from ..db import sessionmaker
 from ..models import Camera
 from ..mqtt import onvif
-from ..services import raw_log
+from ..services import raw_log, throttle
 from ..services.binding import engine as binding_engine
 from .base import DetectionSource
 
@@ -58,6 +58,7 @@ class MqttInboundSource(DetectionSource):
     async def _start(self) -> None:
         await binding_engine.reload()
         await raw_log.reload()
+        await throttle.reload()
         self._stopping.clear()
         self._task = asyncio.create_task(self._loop(), name="mqtt-inbound")
 
@@ -73,11 +74,13 @@ class MqttInboundSource(DetectionSource):
     async def reload(self) -> None:
         await binding_engine.reload()
         await raw_log.reload()
+        await throttle.reload()
 
     def status(self) -> dict:
         return {**super().status(), "connected": self.connected,
                 "received": self.received, "matched": self.matched,
                 "raw_log": raw_log.status(),
+                "throttle": throttle.status(),
                 "bindings": binding_engine.count,
                 "cameras": binding_engine.camera_count}
 
@@ -126,6 +129,10 @@ class MqttInboundSource(DetectionSource):
         if _NOISE.match(topic):
             return
         self.received += 1
+
+        # 완충장치. 같은 메시지가 쏟아지면 여기서 끝낸다 — 바인딩도 DB 도 타지 않는다.
+        if not throttle.allow(topic, raw):
+            return
 
         payload = onvif.parse_payload(raw)
         mac, rest = onvif.split_topic(topic)

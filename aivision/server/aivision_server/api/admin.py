@@ -21,7 +21,7 @@ from ..detection.registry import registry
 from ..media import backend as media_backend
 from ..models import MqttMessage, Solution
 from ..schemas import SettingsOut, SettingsPatch, SolutionOut, SolutionPatch
-from ..services import raw_log
+from ..services import raw_log, throttle
 from ..services import settings_store as store
 from ..streaming.manager import manager
 
@@ -64,6 +64,8 @@ async def get_settings_api(session: AsyncSession = Depends(get_session)) -> Sett
         snapshot_on_event=bool(runtime.get("snapshot_on_event", s.snapshot_on_event)),
         event_dedup_sec=float(runtime.get("event_dedup_sec", s.event_dedup_sec)),
         record_max_gb=float(runtime.get("record_max_gb", s.record_max_gb) or 0),
+        inbound_min_interval_sec=float(runtime.get("inbound_min_interval_sec",
+                                                   s.inbound_min_interval_sec)),
     )
 
 
@@ -82,6 +84,8 @@ async def put_settings(body: SettingsPatch,
     if {"mqtt_log_mode", "mqtt_log_topics"} & runtime.keys():
         # 적재 정책은 캐시돼 있다. 저장만 하면 다음 재시작까지 반영되지 않는다.
         await raw_log.reload()
+    if "inbound_min_interval_sec" in runtime:
+        await throttle.reload()
     return await get_settings_api(session)
 
 

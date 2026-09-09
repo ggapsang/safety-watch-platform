@@ -9,6 +9,7 @@ MQTT 로 보내던 모듈이 HTTP 로 옮겨 와도 규칙을 다시 짤 필요�
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -16,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..db import sessionmaker
-from ..services import raw_log
+from ..services import raw_log, throttle
 from ..services.binding import engine
 from ..services.events import ingest_signal
 
@@ -44,6 +45,11 @@ async def ingest(body: IngestBody) -> IngestResult:
 
     안 걸려도 200 을 준다 — 보낸 쪽 잘못이 아니라 아직 규칙이 없는 것일 수 있다.
     """
+    # MQTT 와 같은 완충장치를 지난다. 전송이 다르다고 다르게 굴면 어드민이 둘을 외워야 한다.
+    if not throttle.allow(body.topic, json.dumps(body.payload, sort_keys=True)):
+        return IngestResult(accepted=True, matched=0,
+                            detail="같은 메시지가 짧은 간격으로 반복되어 건너뛰었습니다.")
+
     signals = engine.apply(body.topic, body.payload, transport="http")
 
     # 원문 적재는 정책을 따른다(기본은 남기지 않음). MQTT 인바운드와 같은 규칙이다 —

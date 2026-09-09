@@ -117,6 +117,9 @@ services:
       # '넘치면 무엇부터 버리나'는 정책이라 코어가 본다. 미디어 서버는 시간 기반
       # 회전(recordDeleteAfter)만 할 수 있어 용량 상한은 여기서 지킨다.
       RECORD_DIR: /recordings
+      # 같은 메시지(토픽+페이로드 동일)를 이 간격 안에서는 한 번만 처리한다. 0 이면 끔.
+      # 중복 억제(20초, DB 로 판단)와는 층이 다르다 — 이건 문 앞에서 메모리로 막는다.
+      INBOUND_MIN_INTERVAL_SEC: ${INBOUND_MIN_INTERVAL_SEC:-1}
       # 전체 용량 상한(GB). 0 이면 제한 없음. 관리자 화면에서 덮어쓸 수 있다.
       RECORD_MAX_GB: ${RECORD_MAX_GB:-0}
       # 위 마운트의 '호스트 쪽' 이름. 화면에 '지금 어디에 쌓이는가' 를 보여 주는 용도일 뿐

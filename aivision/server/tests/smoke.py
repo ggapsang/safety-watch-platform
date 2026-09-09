@@ -524,6 +524,82 @@ async def main() -> int:
                   sysinfo.get("record", {}).get("limit_gb") == 5, str(sysinfo.get("record")))
             await c.put("/api/settings", json={"record_max_gb": 0})
 
+            # ── 완충장치: 같은 메시지가 쏟아질 때 ───────────────────────
+            # 현장 시나리오 그대로다. 카메라 엣지가 토픽 "invasion" 에 고정 문구
+            # "someone invasion" 을 발행하고, 그것이 초당 여러 번 쏟아진다.
+            from aivision_server.services import throttle
+
+            async with sessionmaker()() as sdb:
+                sdb.add(Solution(code="INVASION", name="invasion", short_name="침입",
+                                 event_type="침입 감지", color="#c64545", sort_order=9))
+                await sdb.commit()
+            await engine.reload()
+
+            r = await c.post("/api/bindings", json={
+                "name": "invasion", "topic_pattern": "invasion",
+                "camera_from": "fixed", "camera_id": cid,
+                "item_from": "fixed", "solution_code": "INVASION",
+                "state_expr": ""})          # 수신 자체가 발생
+            check("invasion 바인딩 생성", r.status_code == 201, r.text)
+            invasion_id = r.json()["id"]
+
+            before = (await events())["total"]
+            for _ in range(50):                      # 같은 메시지 50연발
+                await feed("invasion", "someone invasion")
+            after = (await events())["total"]
+            check("연발해도 이벤트는 하나", after == before + 1, f"{before} -> {after}")
+            st = throttle.status()
+            check("나머지는 문 앞에서 버려진다", st["dropped"] >= 49, str(st))
+
+            page = await events()
+            hit = [e for e in page["items"] if e["sol"] == "INVASION"]
+            check("invasion 이벤트 생성", len(hit) == 1, str([e["sol"] for e in page["items"]]))
+            check("평문 페이로드도 받는다", hit[0]["type"] == "침입 감지", str(hit[0]))
+
+            # 빈 페이로드 연발 (한화비전이 이따금 뿜는 것). 첫 건은 통과하지만
+            # 중복 억제가 받아 이벤트로는 안 쌓인다. 나머지는 완충장치가 버린다.
+            dropped_before = throttle.status()["dropped"]
+            for _ in range(30):
+                await feed("invasion", "")
+            check("빈 메시지 연발도 막힌다",
+                  throttle.status()["dropped"] - dropped_before >= 29,
+                  str(throttle.status()))
+
+            # 내용이 다르면 막지 않는다 — 라이브 박스처럼 매번 달라지는 것은 통과해야 한다
+            passed_before = throttle.status()["passed"]
+            for i in range(5):
+                await feed("probe/varies", json.dumps({"n": i}))
+            check("내용이 다르면 통과시킨다",
+                  throttle.status()["passed"] - passed_before == 5, str(throttle.status()))
+
+            # 내용 조건으로 아예 걸러 낼 수도 있다. 완충장치는 '빈도' 를 막고,
+            # 내용 조건은 '무엇을' 막는다 — 빈 메시지를 이벤트로 만들지 않으려면 이쪽이다.
+            await c.patch(f"/api/bindings/{invasion_id}",
+                          json={"payload_filter": {"$._raw": "someone invasion"}})
+
+            async def invasion_match(payload: str) -> bool:
+                res = (await c.post("/api/bindings/test",
+                                    json={"topic": "invasion", "payload": payload})).json()
+                hit = [x for x in res if x["binding_id"] == invasion_id]
+                return bool(hit) and hit[0]["matched"]
+
+            check("내용 조건: 빈 메시지는 안 걸린다", not await invasion_match(""))
+            check("내용 조건: 다른 문구도 안 걸린다", not await invasion_match("noise"))
+            check("내용 조건: 정한 문구는 걸린다", await invasion_match("someone invasion"))
+            await c.patch(f"/api/bindings/{invasion_id}", json={"payload_filter": None})
+
+            # 끌 수 있어야 한다
+            r = await c.put("/api/settings", json={"inbound_min_interval_sec": 0})
+            check("완충 간격 저장", r.json()["inbound_min_interval_sec"] == 0, r.text)
+            await throttle.reload()
+            passed_before = throttle.status()["passed"]
+            for _ in range(4):
+                await feed("invasion", "someone invasion")
+            check("0 이면 전부 통과",
+                  throttle.status()["passed"] - passed_before == 4, str(throttle.status()))
+            await c.put("/api/settings", json={"inbound_min_interval_sec": 1})
+            await throttle.reload()
+
             # ── 원문 적재 정책 ─────────────────────────────────────────
             # 기본은 남기지 않는다. 라이브 박스처럼 초당 여러 번 들어오는 트래픽을
             # 기본으로 적재하면 하루 수십만 줄이 쌓인다. 실시간 발견은 'MQTT 로그'
