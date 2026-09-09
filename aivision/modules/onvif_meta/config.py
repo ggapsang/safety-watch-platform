@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 sys.path.insert(0, "/app")
 
-from _sdk import BaseConfig, class_map_from_env, flag  # noqa: E402
+from _sdk import BaseConfig, class_map_from_env, env, flag  # noqa: E402
 
 
 @dataclass
@@ -23,6 +23,9 @@ class Config(BaseConfig):
     # 표에 없는 클래스도 그릴지. 이 모듈은 이벤트를 만들지 않으므로 기본은 다 그린다 —
     # 무엇이 잡히는지 눈으로 보는 것이 이 모듈의 용도다.
     keep_unmapped: bool = True
+    # 그리지 않을 카메라 클래스(소문자로 보관). 사람 하나에 Human·Head·Face 가 겹쳐
+    # 나오므로 기본적으로 안쪽 둘을 빼는 편이 화면이 깔끔하다.
+    skip_classes: set[str] = field(default_factory=set)
 
     @property
     def capabilities(self) -> list[str]:
@@ -40,4 +43,5 @@ def load() -> Config:
     cfg.load_base()
     cfg.class_map = class_map_from_env("CLASS_MAP")
     cfg.keep_unmapped = flag("KEEP_UNMAPPED", True)
+    cfg.skip_classes = {c.strip().lower() for c in env("SKIP_CLASSES").split(",") if c.strip()}
     return cfg

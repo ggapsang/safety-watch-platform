@@ -89,7 +89,8 @@ class MetadataSource(Source):
             docs, self._buffer = metadata.split_documents(self._buffer)
             for doc in docs:
                 boxes = metadata.parse_boxes(doc, self.cfg.class_map,
-                                             keep_unmapped=self.cfg.keep_unmapped)
+                                             keep_unmapped=self.cfg.keep_unmapped,
+                                             skip=self.cfg.skip_classes)
                 if boxes is None:
                     self._note_event(doc)
                     continue          # 박스 이야기가 아닌 문서 — 화면을 건드리지 않는다

@@ -72,6 +72,12 @@ def test_boxes() -> None:
     filtered = metadata.parse_boxes(FRAME, {"Vehicle": "차량"}, keep_unmapped=False)
     check(filtered == [], "표에 없는 클래스는 걸러낼 수 있다")
 
+    check(metadata.parse_boxes(FRAME, skip={"human"}) == [], "제외 목록의 클래스는 안 그린다")
+    check(len(metadata.parse_boxes(FRAME, skip={"face", "head"})) == 1,
+          "제외 목록에 없는 클래스는 그대로 그린다")
+    check(metadata.parse_boxes(FRAME, {"Human": "사람"}, skip={"human"}) == [],
+          "제외는 이름 바꾸기 전의 카메라 원래 이름으로 판단한다")
+
 
 def test_frame_kinds() -> None:
     print("문서 종류 구분")

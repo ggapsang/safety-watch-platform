@@ -220,6 +220,7 @@ docker compose logs -f camera-meta
 |---|---|
 | `META_CLASS_MAP` | 카메라 클래스 이름 -> 화면에 쓸 이름. 예 `{"Human":"사람"}`. 비우면 원래 이름 |
 | `META_KEEP_UNMAPPED` | 표에 없는 클래스도 그릴지 (기본 켬 — 무엇이 잡히는지 보려고) |
+| `META_SKIP_CLASSES` | 그리지 않을 클래스. 기본 `Head,Face` — 사람 하나에 Human·Head·Face 가 겹쳐 나와 박스가 세 겹이 됩니다 |
 | `META_LIVE_MIN_INTERVAL` | 라이브 발행 최소 간격(초). 기본 0.2 |
 
 ```bash

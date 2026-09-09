@@ -110,8 +110,14 @@ def _class_of(obj: ET.Element) -> tuple[str, float]:
 
 
 def parse_boxes(doc: bytes, class_map: dict[str, str] | None = None,
-                keep_unmapped: bool = True) -> list[dict] | None:
+                keep_unmapped: bool = True,
+                skip: set[str] | None = None) -> list[dict] | None:
     """문서 하나에서 박스를 뽑는다.
+
+    `skip` 은 그리지 않을 클래스(소문자 비교). 카메라는 사람 하나를 잡으면 Human 안에
+    Head·Face 를 겹쳐 내보내는데, 화면에서는 박스 세 겹이 되어 오히려 보기 나쁘다.
+    이름을 바꾸기(class_map) 전의 **카메라 원래 이름**으로 거른다 — 카메라가 뭐라고
+    부르는지가 판단 기준이기 때문이다.
 
     객체가 실린 프레임이 아니면 None 을 돌려준다. **빈 리스트와 None 은 다르다** —
     빈 리스트는 '이 프레임에는 아무 것도 없다'(화면의 박스를 지워야 한다)이고,
@@ -146,6 +152,8 @@ def parse_boxes(doc: bytes, class_map: dict[str, str] | None = None,
                 y1, y2 = y2, y1
 
             name, score = _class_of(obj)
+            if skip and name.lower() in skip:
+                continue
             label = (class_map or {}).get(name, "")
             if not label:
                 if not keep_unmapped:

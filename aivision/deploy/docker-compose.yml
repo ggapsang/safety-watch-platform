@@ -193,6 +193,8 @@ services:
       CLASS_MAP: ${META_CLASS_MAP:-}
       # 표에 없는 클래스도 그릴지. 무엇이 잡히는지 보려면 켜 두는 편이 낫다.
       KEEP_UNMAPPED: ${META_KEEP_UNMAPPED:-true}
+      # 그리지 않을 클래스. 사람 하나에 Human·Head·Face 가 겹쳐 나와 박스가 세 겹이 된다.
+      SKIP_CLASSES: ${META_SKIP_CLASSES:-Head,Face}
       # 라이브 발행 최소 간격(초). 브라우저가 감당할 수준으로 눌러 준다.
       LIVE_MIN_INTERVAL: ${META_LIVE_MIN_INTERVAL:-0.2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

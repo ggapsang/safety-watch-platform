@@ -7,8 +7,15 @@
  *   · 나중에 전송 방식을 바꿔도(WebRTC 등) 오버레이 코드는 그대로 쓴다.
  *   · 한글 라벨을 OpenCV 로 그리면 깨진다. 브라우저에서 그리면 그럴 일이 없다.
  *
- * 박스 좌표는 0~1 정규화라 SVG viewBox="0 0 1 1" 에 그대로 얹힌다. 영상은 object-contain
- * 으로 맞춰 잘라내지 않는다 — object-cover 로 자르면 박스와 영상이 어긋난다.
+ * 박스 좌표는 0~1 정규화다. 다만 SVG 를 viewBox="0 0 1 1" 로 두면 안 된다 —
+ * 두 가지가 조용히 깨진다.
+ *   · 정사각 좌표계라 16:9 영상과 레터박스가 어긋나 박스가 엉뚱한 자리에 그려진다.
+ *   · font-size 가 0.035 같은 소수가 되어 브라우저의 글자 배치가 무너진다(낱자가 흩어진다).
+ * 그래서 **영상의 실제 픽셀 크기를 viewBox 로 쓴다.** <img> 가 실려야 알 수 있으므로
+ * onLoad 에서 naturalWidth/Height 를 받아 둔다. 영상과 SVG 가 같은 비율·같은 정렬
+ * (object-contain / xMidYMid meet)을 쓰므로 레터박스까지 정확히 겹친다.
+ *
+ * 영상은 object-contain 으로 맞춘다 — object-cover 로 자르면 박스와 영상이 어긋난다.
  *
  * 주의: MJPEG 은 연결을 계속 붙잡는다. 브라우저의 동시 연결 한도(HTTP/1.1 기준 6개) 때문에
  *   화면에 여러 개를 동시에 띄우면 다른 API 호출이 막힌다. active=false 면 <img> 를 아예
@@ -46,6 +53,8 @@ export function LiveVideo({
   const [failed, setFailed] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  // 오버레이 좌표계. 영상이 실리기 전에는 16:9 로 가정한다(현장 카메라 기본값).
+  const [size, setSize] = useState({ w: 1920, h: 1080 });
 
   // 카메라가 오프라인 → 정상으로 돌아오면 스트림을 다시 요청한다.
   useEffect(() => {
@@ -75,42 +84,66 @@ export function LiveVideo({
             key={nonce}
             src={`${api.streamUrl(camera.id)}?t=${nonce}`}
             alt={`${camera.name} 라이브 영상`}
-            onLoad={() => setLoaded(true)}
+            onLoad={(e) => {
+              setLoaded(true);
+              const img = e.currentTarget;
+              if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                setSize({ w: img.naturalWidth, h: img.naturalHeight });
+              }
+            }}
             onError={() => setFailed(true)}
             className="absolute inset-0 h-full w-full object-contain"
           />
         ) : null}
 
-        {/* 박스 오버레이 — 영상과 같은 정규화 좌표계 */}
+        {/* 박스 오버레이 — 영상과 같은 비율·정렬이라 레터박스까지 겹친다 */}
         {showStream && boxes.length > 0 && (
           <svg
-            viewBox="0 0 1 1"
+            viewBox={`0 0 ${size.w} ${size.h}`}
             preserveAspectRatio="xMidYMid meet"
             className="pointer-events-none absolute inset-0 h-full w-full"
           >
-            {boxes.map((b, i) => (
-              <g key={i}>
-                <rect
-                  x={b.x1}
-                  y={b.y1}
-                  width={Math.max(0, b.x2 - b.x1)}
-                  height={Math.max(0, b.y2 - b.y1)}
-                  fill="none"
-                  stroke="#e8703a"
-                  strokeWidth={0.004}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <text
-                  x={b.x1}
-                  y={Math.max(0.03, b.y1 - 0.012)}
-                  fill="#f1c2b3"
-                  fontSize={0.035}
-                  fontWeight={600}
-                >
-                  {b.label} {b.score ? b.score.toFixed(2) : ""}
-                </text>
-              </g>
-            ))}
+            {boxes.map((b, i) => {
+              const x = b.x1 * size.w;
+              const y = b.y1 * size.h;
+              const w = Math.max(0, (b.x2 - b.x1) * size.w);
+              const h = Math.max(0, (b.y2 - b.y1) * size.h);
+              const font = size.h * 0.028;
+              const label = b.score ? `${b.label} ${b.score.toFixed(2)}` : b.label;
+              // 라벨이 화면 위로 잘리면 박스 안쪽으로 내린다.
+              const labelY = y > font * 1.3 ? y - font * 0.4 : y + font * 1.1;
+              return (
+                <g key={i}>
+                  <rect
+                    x={x}
+                    y={y}
+                    width={w}
+                    height={h}
+                    fill="none"
+                    stroke="#e8703a"
+                    // non-scaling-stroke 이므로 이 값은 '화면 픽셀'이다.
+                    // user unit 으로 착각해 소수를 넣으면 선이 사라진다.
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  {label && (
+                    <text
+                      x={x}
+                      y={labelY}
+                      fill="#ffd9c9"
+                      fontSize={font}
+                      fontWeight={600}
+                      stroke="rgba(0,0,0,.55)"
+                      strokeWidth={3}
+                      paintOrder="stroke"
+                      vectorEffect="non-scaling-stroke"
+                    >
+                      {label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
           </svg>
         )}
 
