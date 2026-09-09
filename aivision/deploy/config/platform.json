@@ -3,12 +3,12 @@
   "solutions": [
     {
       "code": "INVASION",
-      "name": "침입",
+      "name": "invasion",
       "short_name": "침입",
-      "description": "카메라 엣지가 발행하는 침입 알림",
+      "description": "카메라 엣지가 발행하는 침입 알람",
       "event_type": "침입 감지",
       "color": "#c64545",
-      "sort_order": 10,
+      "sort_order": 1,
       "enabled": true
     }
   ],
@@ -18,35 +18,37 @@
       "enabled": true,
       "transport": "mqtt",
       "payload_profile": "raw",
-      "priority": 10,
+      "priority": 100,
       "live_only": true,
       "topic_pattern": "aivision/live/+",
       "payload_filter": null,
       "camera_from": "topic_segment",
       "camera_expr": "$topic[2]",
+      "camera_id": null,
       "item_from": "fixed",
       "item_expr": "",
       "solution_code": null,
       "state_expr": "",
       "state_active": "active",
       "state_inactive": "inactive",
-      "module_expr": "$.module_id",
+      "module_expr": "",
       "confidence_expr": "",
       "ts_expr": "",
       "boxes_expr": "$.boxes",
       "boxes_format": "xyxy_norm"
     },
     {
-      "name": "모듈 판정",
+      "name": "우리 모듈 탐지",
       "enabled": true,
       "transport": "mqtt",
       "payload_profile": "raw",
-      "priority": 20,
+      "priority": 100,
       "live_only": false,
       "topic_pattern": "aivision/detect/#",
       "payload_filter": null,
       "camera_from": "payload",
       "camera_expr": "$.camera_id",
+      "camera_id": null,
       "item_from": "payload",
       "item_expr": "$.item",
       "solution_code": null,
@@ -60,16 +62,19 @@
       "boxes_format": "xyxy_norm"
     },
     {
-      "name": "invasion",
+      "name": "invasion (카메라 엣지)",
       "enabled": true,
       "transport": "mqtt",
       "payload_profile": "raw",
-      "priority": 30,
+      "priority": 100,
       "live_only": false,
       "topic_pattern": "invasion",
-      "payload_filter": null,
+      "payload_filter": {
+        "$._raw": "someone invasion"
+      },
       "camera_from": "fixed",
       "camera_expr": "",
+      "camera_id": 4,
       "item_from": "fixed",
       "item_expr": "",
       "solution_code": "INVASION",
@@ -83,5 +88,7 @@
       "boxes_format": "xyxy_norm"
     }
   ],
-  "runtime": {}
+  "runtime": {
+    "record_max_gb": 20.0
+  }
 }

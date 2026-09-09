@@ -101,12 +101,23 @@ async def apply(session: AsyncSession, path: Path) -> list[str]:
     cams = (await session.execute(select(Camera.id).order_by(Camera.id))).scalars().all()
     only_cam = cams[0] if len(cams) == 1 else None
 
+    # 이미 있는 것을 알아보는 기준은 이름이 아니라 **하는 일**이다(통로 + 토픽 패턴).
+    # 이름으로만 보면, 같은 토픽을 이미 받고 있는데 이름만 다른 바인딩을 못 알아보고 또
+    # 만든다. 그러면 메시지 하나가 두 번 평가된다 — 실제로 그렇게 겹쳤다.
+    have = {(b.transport, b.topic_pattern): b.name
+            for b in (await session.execute(select(InboundBinding))).scalars().all()}
+
     for spec in data.get("bindings") or []:
         name = str(spec.get("name") or "").strip()
         if not name:
             continue
-        if await session.scalar(select(InboundBinding).where(InboundBinding.name == name)):
+        job = (str(spec.get("transport") or "mqtt"), str(spec.get("topic_pattern") or ""))
+        if job in have:
+            if have[job] != name:
+                log.info("바인딩 '%s' 은(는) 만들지 않습니다 — '%s' 이(가) 이미 %s 를 받고 있습니다",
+                         name, have[job], job[1])
             continue
+        have[job] = name
         row = {k: v for k, v in spec.items() if k in _BINDING_FIELDS}
         note = ""
         if row.get("camera_from") == "fixed":
