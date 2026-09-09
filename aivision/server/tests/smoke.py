@@ -645,10 +645,28 @@ async def main() -> int:
             r = await c.get("/api/system")
             check("시스템 상태", r.status_code == 200 and "detection_sources" in r.json())
 
+            # ── 탐지 항목 삭제는 이력을 지키는가 ─────────────────────────
+            #
+            # 예전에는 외래키 CASCADE 라 항목 하나 지우면 이벤트가 통째로 날아갔다.
+            # 이제 스키마에 외래키가 없고, 무엇을 지울지는 코드가 정한다.
+            r = await c.delete("/api/solutions/INVASION")
+            check("이벤트가 있으면 항목 삭제 거부 409", r.status_code == 409, r.text)
+            check("몇 건이 걸리는지 알려 준다", "건" in r.json().get("detail", ""), r.text)
+            before = (await events())["total"]
+            check("거부됐으면 이벤트는 그대로", before > 0, str(before))
+
+            r = await c.delete("/api/solutions/INVASION?force=true")
+            check("강제 삭제 200", r.status_code == 200, r.text)
+            check("이력째 지워졌다", r.json()["events"] > 0, r.text)
+            check("항목이 사라졌다",
+                  (await c.get("/api/solutions")).json() is not None
+                  and all(x["code"] != "INVASION"
+                          for x in (await c.get("/api/solutions")).json()))
+
             # ── 정리 ────────────────────────────────────────────────────
             check("카메라 삭제 204",
                   (await c.delete(f"/api/cameras/{cid}")).status_code == 204)
-            check("삭제 시 이벤트 캐스케이드", (await events())["total"] == 0)
+            check("삭제하면 그 카메라 이벤트도 정리된다", (await events())["total"] == 0)
 
     print()
     if fails:

@@ -18,6 +18,7 @@ from ..detection.registry import registry
 from ..models import Camera, CameraSolution, Event, Solution
 from ..schemas import (CameraCreate, CameraOrder, CameraOut, CameraPatch,
                        CameraTestResult)
+from ..services import cleanup
 from ..services.bus import bus
 from ..streaming.manager import manager, masked_rtsp_url, rtsp_url
 from ..timeutil import age_sec, as_utc
@@ -226,11 +227,14 @@ async def patch_camera(camera_id: int, body: CameraPatch,
 @router.delete("/{camera_id}", status_code=204)
 async def delete_camera(camera_id: int, session: AsyncSession = Depends(get_session)) -> None:
     cam = await _get(session, camera_id)
-    # 주의: 이벤트도 함께 지워진다(FK CASCADE). 이력을 남기려면 삭제 대신 enabled=false 를 쓴다.
+    # 딸린 것 정리는 코드가 한다(스키마에 외래키를 두지 않는다). 무엇이 지워지고 무엇이
+    # 남는지는 services/cleanup.py 에 적혀 있다.
+    # 이력을 남기려면 삭제 대신 enabled=false 를 쓴다.
+    counts = await cleanup.delete_camera(session, camera_id)
     await session.delete(cam)
     await session.commit()
     await _after_change(session)
-    log.info("카메라 삭제: #%d", camera_id)
+    log.info("카메라 삭제: #%d (이벤트 %d건)", camera_id, counts["events"])
 
 
 @router.post("/{camera_id}/test", response_model=CameraTestResult)

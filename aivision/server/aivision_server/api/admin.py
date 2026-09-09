@@ -21,7 +21,7 @@ from ..detection.registry import registry
 from ..media import backend as media_backend
 from ..models import MqttMessage, Solution
 from ..schemas import SettingsOut, SettingsPatch, SolutionOut, SolutionPatch
-from ..services import config_file, raw_log, throttle
+from ..services import cleanup, config_file, raw_log, throttle
 from ..services import settings_store as store
 from ..streaming.manager import manager
 
@@ -47,6 +47,32 @@ async def patch_solution(code: str, body: SolutionPatch,
     await session.commit()
     await session.refresh(sol)
     return sol
+
+
+@router.delete("/solutions/{code}", status_code=200)
+async def delete_solution(code: str, force: bool = False,
+                          session: AsyncSession = Depends(get_session)) -> dict:
+    """탐지 항목을 지웁니다.
+
+    **이벤트가 있으면 거부합니다.** 탐지 항목은 분류 이름일 뿐인데, 예전에는 외래키
+    CASCADE 로 묶여 있어 이름 하나 정리하려다 사고 이력이 통째로 날아갔습니다. 안전관리
+    기록을 다루는 플랫폼에서 그 동작이 기본값이어서는 안 됩니다.
+
+    정말 이력째 지우려면 `?force=true` 로 분명히 말해야 합니다. 몇 건이 사라지는지는
+    거부 메시지가 알려 줍니다.
+    """
+    sol = await session.get(Solution, code)
+    if sol is None:
+        raise HTTPException(status_code=404, detail="탐지 항목을 찾을 수 없습니다")
+    try:
+        counts = await cleanup.delete_solution(session, code, force=force)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.delete(sol)
+    await session.commit()
+    from .bindings import _after_change            # 바인딩 참조가 끊겼으니 캐시를 갈아 끼운다
+    await _after_change()
+    return {"code": code, **counts}
 
 
 # ────────────────────────────────────────────────────────────── 운영 설정

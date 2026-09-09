@@ -15,9 +15,9 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import (JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer,
+from sqlalchemy import (JSON, Boolean, DateTime, Float, Index, Integer,
                         String, Text, UniqueConstraint, func)
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
 from .db import Base
 
@@ -49,7 +49,9 @@ class Solution(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    cameras: Mapped[list["CameraSolution"]] = relationship(back_populates="solution")
+    cameras: Mapped[list["CameraSolution"]] = relationship(
+        back_populates="solution", viewonly=True,
+        primaryjoin=lambda: Solution.code == foreign(CameraSolution.solution_code))
 
 
 class Camera(Base):
@@ -112,9 +114,11 @@ class Camera(Base):
     # 주의: 두 관계 모두 lazy="selectin" 이어야 한다. 비동기 세션에서는 지연 로딩이
     #   MissingGreenlet 로 터지는데, 삭제 시 cascade 가 컬렉션을 읽으려 하기 때문이다.
     solutions: Mapped[list["CameraSolution"]] = relationship(
-        back_populates="camera", cascade="all, delete-orphan", lazy="selectin")
+        back_populates="camera", viewonly=True, lazy="selectin",
+        primaryjoin=lambda: Camera.id == foreign(CameraSolution.camera_id))
     bindings: Mapped[list["InboundBinding"]] = relationship(
-        back_populates="camera", cascade="all, delete-orphan", lazy="selectin")
+        back_populates="camera", viewonly=True, lazy="selectin",
+        primaryjoin=lambda: Camera.id == foreign(InboundBinding.camera_id))
 
     __table_args__ = (UniqueConstraint("ip", "rtsp_path", name="uq_camera_endpoint"),)
 
@@ -124,14 +128,16 @@ class CameraSolution(Base):
 
     __tablename__ = "camera_solutions"
 
-    camera_id: Mapped[int] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"),
-                                           primary_key=True)
-    solution_code: Mapped[str] = mapped_column(ForeignKey("solutions.code", ondelete="CASCADE"),
-                                               primary_key=True)
+    camera_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    solution_code: Mapped[str] = mapped_column(String(16), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    camera: Mapped[Camera] = relationship(back_populates="solutions")
-    solution: Mapped[Solution] = relationship(back_populates="cameras", lazy="joined")
+    camera: Mapped[Camera] = relationship(
+        back_populates="solutions", viewonly=True,
+        primaryjoin=lambda: foreign(CameraSolution.camera_id) == Camera.id)
+    solution: Mapped[Solution] = relationship(
+        back_populates="cameras", viewonly=True, lazy="joined",
+        primaryjoin=lambda: foreign(CameraSolution.solution_code) == Solution.code)
 
 
 class InboundBinding(Base):
@@ -168,13 +174,12 @@ class InboundBinding(Base):
     # ── 어떤 카메라인가 ──────────────────────────────────────────────
     camera_from: Mapped[str] = mapped_column(String(16), default="topic_mac")
     camera_expr: Mapped[str] = mapped_column(String(200), default="")
-    camera_id: Mapped[int | None] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"))
+    camera_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
     # ── 어떤 탐지 항목인가 ───────────────────────────────────────────
     item_from: Mapped[str] = mapped_column(String(16), default="fixed")
     item_expr: Mapped[str] = mapped_column(String(200), default="")
-    solution_code: Mapped[str | None] = mapped_column(
-        ForeignKey("solutions.code", ondelete="CASCADE"))
+    solution_code: Mapped[str | None] = mapped_column(String(16), index=True)
 
     # ── 상태 ────────────────────────────────────────────────────────
     # 비우면 '메시지 수신 자체가 발생'. 채우면 그 값으로 active/inactive 를 가른다.
@@ -196,7 +201,9 @@ class InboundBinding(Base):
     last_matched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     match_count: Mapped[int] = mapped_column(Integer, default=0)
 
-    camera: Mapped[Camera | None] = relationship(back_populates="bindings")
+    camera: Mapped[Camera | None] = relationship(
+        back_populates="bindings", viewonly=True,
+        primaryjoin=lambda: foreign(InboundBinding.camera_id) == Camera.id)
 
 
 # ────────────────────────────────────────────────────────────── 이벤트
@@ -208,9 +215,8 @@ class Event(Base):
     code: Mapped[str] = mapped_column(String(16), unique=True, index=True)   # EVT-00001
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
-    camera_id: Mapped[int] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), index=True)
-    solution_code: Mapped[str] = mapped_column(ForeignKey("solutions.code", ondelete="CASCADE"),
-                                               index=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    solution_code: Mapped[str] = mapped_column(String(16), index=True)
     event_type: Mapped[str] = mapped_column(String(64))
 
     # source 는 '어느 통로로 왔나', module_id 는 '무엇이 판정했나'. 둘은 다른 축이다.
@@ -226,10 +232,15 @@ class Event(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    camera: Mapped[Camera] = relationship(lazy="joined")
-    solution: Mapped[Solution] = relationship(lazy="joined")
-    boxes: Mapped[list["EventBox"]] = relationship(cascade="all, delete-orphan",
-                                                   lazy="selectin")
+    camera: Mapped[Camera] = relationship(
+        viewonly=True, lazy="joined",
+        primaryjoin=lambda: foreign(Event.camera_id) == Camera.id)
+    solution: Mapped[Solution] = relationship(
+        viewonly=True, lazy="joined",
+        primaryjoin=lambda: foreign(Event.solution_code) == Solution.code)
+    boxes: Mapped[list["EventBox"]] = relationship(
+        viewonly=True, lazy="selectin",
+        primaryjoin=lambda: Event.id == foreign(EventBox.event_id))
 
     __table_args__ = (
         Index("ix_events_cam_ts", "camera_id", "ts"),
@@ -250,7 +261,7 @@ class EventBox(Base):
     __tablename__ = "event_boxes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[int] = mapped_column(Integer, index=True)
     x1: Mapped[float] = mapped_column(Float)
     y1: Mapped[float] = mapped_column(Float)
     x2: Mapped[float] = mapped_column(Float)
@@ -291,7 +302,8 @@ class AnalyticsModule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     assignments: Mapped[list["ModuleAssignment"]] = relationship(
-        back_populates="module", cascade="all, delete-orphan", lazy="selectin")
+        back_populates="module", viewonly=True, lazy="selectin",
+        primaryjoin=lambda: AnalyticsModule.id == foreign(ModuleAssignment.module_id))
 
 
 class ModuleAssignment(Base):
@@ -304,15 +316,15 @@ class ModuleAssignment(Base):
     __tablename__ = "module_assignments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    module_id: Mapped[str] = mapped_column(
-        ForeignKey("analytics_modules.id", ondelete="CASCADE"), index=True)
-    camera_id: Mapped[int] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"),
-                                           index=True)
+    module_id: Mapped[str] = mapped_column(String(64), index=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
     options: Mapped[dict | None] = mapped_column(JSON)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    module: Mapped[AnalyticsModule] = relationship(back_populates="assignments")
+    module: Mapped[AnalyticsModule] = relationship(
+        back_populates="assignments", viewonly=True,
+        primaryjoin=lambda: foreign(ModuleAssignment.module_id) == AnalyticsModule.id)
 
     __table_args__ = (UniqueConstraint("module_id", "camera_id", name="uq_module_camera"),)
 
@@ -331,10 +343,10 @@ class Recording(Base):
     __tablename__ = "recordings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    camera_id: Mapped[int] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"),
-                                           index=True)
-    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"),
-                                                 index=True)
+    # 널 허용: 카메라를 지워도 이 기록은 남는다. 파일이 디스크에 실제로 있고,
+    # 사고 클립은 카메라 등록 정보보다 오래 보관해야 한다.
+    camera_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    event_id: Mapped[int | None] = mapped_column(Integer, index=True)
     kind: Mapped[str] = mapped_column(String(16), default="event")   # event | manual
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     duration_sec: Mapped[float] = mapped_column(Float, default=0.0)
@@ -396,10 +408,8 @@ class OutboundDelivery(Base):
     __tablename__ = "outbound_deliveries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    target_id: Mapped[int] = mapped_column(ForeignKey("outbound_targets.id", ondelete="CASCADE"),
-                                           index=True)
-    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"),
-                                                 index=True)
+    target_id: Mapped[int] = mapped_column(Integer, index=True)
+    event_id: Mapped[int | None] = mapped_column(Integer, index=True)
     # pending: 아직 안 보냄 / sent: 성공 / failed: 실패했고 재시도 예정 / expired: 최대 시도 초과
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     attempt: Mapped[int] = mapped_column(Integer, default=0)
@@ -427,7 +437,7 @@ class MqttMessage(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     topic: Mapped[str] = mapped_column(String(400), index=True)
     payload: Mapped[str] = mapped_column(Text, default="")
-    camera_id: Mapped[int | None] = mapped_column(ForeignKey("cameras.id", ondelete="SET NULL"))
+    camera_id: Mapped[int | None] = mapped_column(Integer, index=True)
     matched: Mapped[bool] = mapped_column(Boolean, default=False)   # 탐지규칙에 걸렸는지
 
 

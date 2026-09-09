@@ -133,6 +133,25 @@ const RUNTIME_DOCS: Doc[] = [
   { key: "snapshot_on_event", desc: "이벤트가 생길 때 스냅샷을 찍을지" },
 ];
 
+const LIST_DOCS: Doc[] = [
+  {
+    key: "solutions / bindings",
+    desc: "JSON 배열입니다. 여러 개면 { } 를 쉼표로 나열합니다 — [ {...}, {...} ]. 하나만 있어도 배열이고, 없으면 빈 배열 [] 입니다",
+  },
+  {
+    key: "mqtt_log_topics",
+    desc: "배열이 아니라 문자열 하나입니다. 여러 채널은 쉼표로 구분합니다 — \"vendorZ/#, cam/+/alarm\". 앞뒤 공백은 알아서 지웁니다",
+  },
+  {
+    key: "payload_filter",
+    desc: "조건을 여러 개 넣으면 전부 만족해야 걸립니다(AND). 예: {\"$.Type\": \"fire\", \"$.State\": \"true\"}",
+  },
+  {
+    key: "boxes_expr",
+    desc: "여기는 표현식 하나만 적습니다. 그 자리에 박스가 배열로 들어 있어야 합니다 — 표현식을 여러 개 나열할 수는 없습니다",
+  },
+];
+
 const EXPR_DOCS: Doc[] = [
   { key: "$.a.b.c", desc: "페이로드에서 꺼냅니다" },
   { key: "$topic[2]", desc: "토픽을 / 로 자른 뒤 n 번째 조각 (0 부터)" },
@@ -290,6 +309,11 @@ export function ConfigFile() {
           <DocList title="bindings — 발생인가 해제인가" docs={STATE_DOCS} />
           <DocList title="bindings — 부가 추출" docs={EXTRA_DOCS} />
           <DocList title="표현식 문법" note="넷뿐입니다." docs={EXPR_DOCS} />
+          <DocList
+            title="여러 개를 적을 때"
+            note="자리마다 표기가 다릅니다. 배열인 곳과 쉼표로 구분하는 문자열인 곳이 섞여 있어 헷갈리기 쉽습니다."
+            docs={LIST_DOCS}
+          />
           <DocList
             title="runtime — 운영 설정"
             note="비우면 배포가 정한 기본값(compose 환경변수)을 씁니다."

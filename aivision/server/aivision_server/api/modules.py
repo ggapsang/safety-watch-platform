@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
+from ..services import cleanup
 from ..models import AnalyticsModule, Camera, ModuleAssignment
 from ..schemas import (AssignmentCreate, AssignmentOut, ModuleOut, ModuleRegister,
                        ModuleWork, ModuleWorkItem)
@@ -106,6 +107,9 @@ async def register(body: ModuleRegister,
 @router.delete("/{module_id}", status_code=204)
 async def unregister(module_id: str, session: AsyncSession = Depends(get_session)) -> None:
     module = await _get(session, module_id)
+    # 할당만 함께 정리한다. 이 모듈이 만든 이벤트는 남긴다 — module_id 는 '무엇이
+    # 판정했나' 의 기록이지 소유 관계가 아니다.
+    await cleanup.delete_module(session, module.id)
     await session.delete(module)
     await session.commit()
     log.info("모듈 해제: %s", module_id)

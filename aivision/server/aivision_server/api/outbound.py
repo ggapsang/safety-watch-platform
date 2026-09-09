@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
+from ..services import cleanup
 from ..models import Event, OutboundDelivery, OutboundTarget
 from ..schemas import (OutboundTargetCreate, OutboundTargetOut, OutboundTargetPatch,
                        OutboundTestResult)
@@ -100,6 +101,8 @@ async def patch_target(target_id: int, body: OutboundTargetPatch,
 @router.delete("/targets/{target_id}", status_code=204)
 async def delete_target(target_id: int, session: AsyncSession = Depends(get_session)) -> None:
     target = await _get(session, target_id)
+    # 이 대상으로 보낸 전송 이력도 함께. 대상이 없어진 이력은 읽을 수 없다.
+    await cleanup.delete_outbound_target(session, target.id)
     await session.delete(target)
     await session.commit()
 
