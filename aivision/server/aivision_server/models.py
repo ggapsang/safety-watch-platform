@@ -74,6 +74,11 @@ class Camera(Base):
     model: Mapped[str] = mapped_column(String(64), default="")
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 화면에 늘어놓는 순서. 등록 순서가 곧 현장에서 보고 싶은 순서인 경우는 드물다
+    # (게이트 → 야적장 → 출하구 처럼 동선대로 보고 싶어 한다).
+    # 브라우저에 두지 않고 DB 에 두는 이유: 관제실 PC 가 여러 대여도 같은 순서로 보여야 한다.
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
     # ── 녹화 정책 ────────────────────────────────────────────────────
     # 바이트를 쓰는 일은 미디어 서버가 하지만, 무엇을 언제 녹화할지는 코어가 정한다.
     record_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

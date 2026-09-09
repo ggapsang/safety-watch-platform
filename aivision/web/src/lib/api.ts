@@ -79,6 +79,12 @@ export const api = {
   cameras: () => request<Camera[]>("/api/cameras"),
   createCamera: (body: CameraInput) =>
     request<Camera>("/api/cameras", { method: "POST", body: JSON.stringify(body) }),
+  /** 카메라를 보고 싶은 순서로 다시 늘어놓는다. 화면에 보이는 그대로 id 를 나열해 보낸다. */
+  reorderCameras: (ids: number[]) =>
+    request<Camera[]>("/api/cameras/order", {
+      method: "PUT",
+      body: JSON.stringify({ ids }),
+    }),
   patchCamera: (id: number, body: Partial<CameraInput>) =>
     request<Camera>(`/api/cameras/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteCamera: (id: number) => request<void>(`/api/cameras/${id}`, { method: "DELETE" }),

@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./.smoke.db"
 os.environ["SECRET_KEY"] = "y_1fd6RE10V1ajlaE-mBAfLMRYjQDQZ2Q9_HzwDH-4M="
@@ -32,6 +33,17 @@ from aivision_server.main import app                  # noqa: E402
 from aivision_server.models import Solution           # noqa: E402
 
 PPE_TOPIC = "E4:30:22:F3:31:AA/onvif-ej/Device/tns1:Trigger/tns1:Relay/&Relay-1"
+
+# ONVIF 페이로드에 실어 보낼 발생 시각.
+#
+# 날짜를 박아 두면 안 된다. onvif.event_time() 은 카메라 시계가 틀어진 경우를 막으려고
+# **1일 이상 과거인 시각을 믿지 않고 수신 시각으로 대체**하는데, 고정 날짜는 하루만 지나면
+# 그 규칙에 걸려 어제까지 통과하던 테스트가 오늘 갑자기 깨진다(실제로 그렇게 깨졌다).
+#
+# 1시간 전으로 두는 이유는 두 조건을 동시에 만족해야 해서다.
+#   · 신뢰 구간 안 (24시간보다 최근)     -> 페이로드 시각이 그대로 쓰인다
+#   · 중복 억제 창(20초) 밖              -> 뒤에 오는 같은 항목 신호가 이것에 묻히지 않는다
+ONVIF_TS = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
 fails: list[str] = []
 
 
@@ -84,6 +96,30 @@ async def main() -> int:
             check("중복 등록 409",
                   (await c.post("/api/cameras", json={"ip": "192.168.10.11"})).status_code == 409)
 
+            # ── 화면 표시 순서 ──────────────────────────────────────────
+            # 등록 순서가 곧 보고 싶은 순서인 경우는 드물다. 브라우저가 아니라 서버가
+            # 들고 있어야 관제실 PC 가 여러 대여도 같게 보인다.
+            second = (await c.post("/api/cameras", json={"ip": "192.168.10.12"})).json()
+            ids = [x["id"] for x in (await c.get("/api/cameras")).json()]
+            check("기본은 등록 순서", ids == sorted(ids), str(ids))
+
+            r = await c.put("/api/cameras/order", json={"ids": [second["id"], cid]})
+            check("순서 바꾸기 200", r.status_code == 200, r.text)
+            check("바꾼 순서로 응답", [x["id"] for x in r.json()] == [second["id"], cid],
+                  str([x["id"] for x in r.json()]))
+            again = [x["id"] for x in (await c.get("/api/cameras")).json()]
+            check("다시 조회해도 유지", again == [second["id"], cid], str(again))
+
+            # 화면이 필터를 걸어 일부만 보내도, 빠진 카메라가 맨 앞으로 튀어나오면 안 된다
+            r = await c.put("/api/cameras/order", json={"ids": [cid]})
+            check("목록에 없는 카메라는 뒤로",
+                  [x["id"] for x in r.json()] == [cid, second["id"]],
+                  str([x["id"] for x in r.json()]))
+
+            r = await c.put("/api/cameras/order", json={"ids": [9999]})
+            check("없는 카메라 400", r.status_code == 400, r.text)
+            await c.delete(f"/api/cameras/{second['id']}")
+
             # ── 탐지 항목 (현장에서 정하는 것이므로 시드는 없다) ─────────
             async with sessionmaker()() as sdb:
                 sdb.add(Solution(code="ITEM-A", name="시험 항목 A", short_name="A",
@@ -116,7 +152,7 @@ async def main() -> int:
                 "state_expr": "$.Data.LogicalState", "ts_expr": "$.UtcTime"})
 
             await feed(PPE_TOPIC, json.dumps({
-                "UtcTime": "2026-09-08T02:00:00Z",
+                "UtcTime": ONVIF_TS,
                 "Source": {"SimpleItem": [{"Name": "RelayToken", "Value": "Relay-1"}]},
                 "Data": {"SimpleItem": [{"Name": "LogicalState", "Value": "active"}]}}))
             page = await events()

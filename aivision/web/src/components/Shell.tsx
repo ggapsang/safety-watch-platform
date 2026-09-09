@@ -43,13 +43,15 @@ const GROUPS: { group: string; items: NavItem[] }[] = [
     group: "분석",
     items: [
       { to: "/stats", label: "통계", desc: "기간별 발생 분석", icon: <IconChart /> },
-      { to: "/mqtt", label: "MQTT 로그", desc: "실시간 MQTT 수신 메시지", icon: <IconSignal /> },
     ],
   },
   {
+    // MQTT 로그는 평소에 보는 화면이 아니라 '무엇이 들어오는지 확인할 때' 여는 점검 도구다.
+    // 그래서 분석이 아니라 운영에, 그중에서도 맨 아래에 둔다.
     group: "운영",
     items: [
       { to: "/admin", label: "관리자", desc: "카메라 등록 · 시스템 상태", icon: <IconSettings /> },
+      { to: "/mqtt", label: "MQTT 로그", desc: "실시간 MQTT 수신 메시지", icon: <IconSignal /> },
     ],
   },
 ];

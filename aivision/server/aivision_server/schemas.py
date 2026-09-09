@@ -66,8 +66,19 @@ class CameraOut(BaseModel):
     rtsp_url: str = ""             # 분석 모듈이 영상을 가져가는 곳 (미디어 서버 경유)
     record_enabled: bool = False
     record_retention_hours: int = 72
+    sort_order: int = 0            # 화면에 늘어놓는 순서 (작을수록 앞)
     today: int = 0                 # 금일 이벤트 수
     total: int = 0                 # 누적 이벤트 수
+
+
+class CameraOrder(BaseModel):
+    """카메라를 보고 싶은 순서. 화면에 보이는 그대로 id 를 나열한다.
+
+    순서를 숫자로 하나씩 주고받지 않는 이유: 중간에 하나를 끼워 넣을 때마다 뒤의 것들이
+    전부 밀려 여러 번 저장해야 한다. 목록 전체를 통째로 받으면 그 문제가 없다.
+    """
+
+    ids: list[int]
 
 
 class CameraCreate(BaseModel):

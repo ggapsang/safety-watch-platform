@@ -17,7 +17,8 @@ from ..crypto import encrypt
 from ..db import get_session
 from ..detection.registry import registry
 from ..models import Camera, CameraSolution, Event, Solution
-from ..schemas import CameraCreate, CameraOut, CameraPatch, CameraTestResult
+from ..schemas import (CameraCreate, CameraOrder, CameraOut, CameraPatch,
+                       CameraTestResult)
 from ..services.bus import bus
 from ..streaming.manager import manager, masked_rtsp_url, rtsp_url
 from ..timeutil import age_sec, as_utc
@@ -48,6 +49,7 @@ def to_dto(cam: Camera, *, today: int = 0, total: int = 0) -> CameraOut:
         rtsp_url=getattr(manager.stream_info(cam.id), "rtsp", "") or "",
         record_enabled=cam.record_enabled,
         record_retention_hours=cam.record_retention_hours,
+        sort_order=cam.sort_order,
         today=today, total=total,
     )
 
@@ -113,9 +115,45 @@ async def _after_change(session: AsyncSession) -> None:
 
 @router.get("", response_model=list[CameraOut])
 async def list_cameras(session: AsyncSession = Depends(get_session)) -> list[CameraOut]:
-    cams = (await session.execute(select(Camera).order_by(Camera.id))).scalars().unique().all()
+    cams = (await session.execute(
+        select(Camera).order_by(Camera.sort_order, Camera.id))).scalars().unique().all()
     today, total = await _event_counts(session)
     return [to_dto(c, today=today.get(c.id, 0), total=total.get(c.id, 0)) for c in cams]
+
+
+@router.put("/order", response_model=list[CameraOut])
+async def reorder_cameras(body: CameraOrder,
+                          session: AsyncSession = Depends(get_session)) -> list[CameraOut]:
+    """카메라를 보고 싶은 순서로 다시 늘어놓는다.
+
+    받은 목록에 없는 카메라는 뒤로 밀되 서로의 순서는 유지한다. 화면이 필터를 걸고 있어
+    일부만 보내는 경우가 있는데, 그때 안 보이던 카메라가 맨 앞으로 튀어나오면 곤란하다.
+    """
+    cams = (await session.execute(
+        select(Camera).order_by(Camera.sort_order, Camera.id))).scalars().unique().all()
+    by_id = {c.id: c for c in cams}
+
+    unknown = [i for i in body.ids if i not in by_id]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"없는 카메라입니다: {unknown}")
+
+    order = 0
+    for cam_id in body.ids:
+        by_id[cam_id].sort_order = order
+        order += 1
+    for cam in cams:                      # 목록에 없던 것들은 뒤에 이어 붙인다
+        if cam.id not in body.ids:
+            cam.sort_order = order
+            order += 1
+
+    await session.commit()
+    log.info("카메라 순서 변경: %s", " > ".join(str(i) for i in body.ids))
+    await bus.publish("cameras-changed", {})
+
+    today, total = await _event_counts(session)
+    fresh = (await session.execute(
+        select(Camera).order_by(Camera.sort_order, Camera.id))).scalars().unique().all()
+    return [to_dto(c, today=today.get(c.id, 0), total=total.get(c.id, 0)) for c in fresh]
 
 
 @router.post("", response_model=CameraOut, status_code=201)

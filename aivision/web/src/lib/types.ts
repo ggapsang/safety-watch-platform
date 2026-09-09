@@ -36,6 +36,8 @@ export interface Camera {
   rtsp_url: string;
   record_enabled: boolean;
   record_retention_hours: number;
+  /** 화면에 늘어놓는 순서 (작을수록 앞). 스트립에서 끌어 바꾼다 */
+  sort_order: number;
   today: number;
   total: number;
 }
