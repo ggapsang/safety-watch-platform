@@ -34,3 +34,21 @@ export const fmtAgo = (iso: string): string => {
   if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전`;
   return `${Math.floor(diff / 86400)}일 전`;
 };
+
+/** 보존 시간을 사람이 읽는 말로. 72 -> "3일", 6 -> "6시간", 36 -> "1일 12시간". */
+export const fmtHours = (hours: number): string => {
+  const h = Math.max(0, Math.round(hours));
+  if (h < 24) return `${h}시간`;
+  const days = Math.floor(h / 24);
+  const rest = h % 24;
+  return rest === 0 ? `${days}일` : `${days}일 ${rest}시간`;
+};
+
+/** 바이트를 사람이 읽는 말로. 저장 용량은 GB 까지면 충분하다. */
+export const fmtBytes = (bytes: number): string => {
+  const gb = bytes / 1024 ** 3;
+  if (gb >= 1) return `${gb.toFixed(1)}GB`;
+  const mb = bytes / 1024 ** 2;
+  if (mb >= 1) return `${mb.toFixed(0)}MB`;
+  return `${Math.max(0, Math.round(bytes / 1024))}KB`;
+};

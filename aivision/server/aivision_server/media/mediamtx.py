@@ -135,7 +135,7 @@ class MediaMTXBackend(MediaBackend):
     # ------------------------------------------------------------- 녹화
 
     async def set_recording(self, camera_id: int, enabled: bool,
-                            retention_days: int = 3) -> bool:
+                            retention_hours: int = 72) -> bool:
         name = path_name(camera_id)
         conf = {
             "record": enabled,
@@ -144,11 +144,11 @@ class MediaMTXBackend(MediaBackend):
             "recordPath": f"{self._record_dir}/%path/%Y-%m-%d_%H-%M-%S-%f",
             "recordFormat": "fmp4",
             "recordSegmentDuration": "1h",
-            "recordDeleteAfter": f"{max(1, retention_days) * 24}h",
+            "recordDeleteAfter": f"{max(1, retention_hours)}h",
         }
         ok, _ = await self._call("PATCH", f"/v3/config/paths/patch/{name}", json=conf)
         if ok:
-            log.info("녹화 %s: %s (보존 %d일)", "켬" if enabled else "끔", name, retention_days)
+            log.info("녹화 %s: %s (보존 %d시간)", "켬" if enabled else "끔", name, retention_hours)
         return ok
 
     async def list_segments(self, camera_id: int, start: datetime,

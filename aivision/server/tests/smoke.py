@@ -14,14 +14,19 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./.smoke.db"
 os.environ["SECRET_KEY"] = "y_1fd6RE10V1ajlaE-mBAfLMRYjQDQZ2Q9_HzwDH-4M="
 os.environ["MQTT_HOST"] = "127.0.0.1"
 os.environ["SNAPSHOT_DIR"] = "./.smoke-snap"
+os.environ["RECORD_DIR"] = "./.smoke-rec"
 os.environ["TZ"] = "Asia/Seoul"
 
 db = pathlib.Path("./.smoke.db")
 if db.exists():
     db.unlink()
+import shutil                                        # noqa: E402
+
+shutil.rmtree("./.smoke-rec", ignore_errors=True)
 
 from httpx import ASGITransport, AsyncClient          # noqa: E402
 
+from aivision_server.config import get_settings      # noqa: E402
 from aivision_server.db import sessionmaker           # noqa: E402
 from aivision_server.main import app                  # noqa: E402
 from aivision_server.models import Solution           # noqa: E402
@@ -415,6 +420,49 @@ async def main() -> int:
             r = await c.get("/api/events/export.csv")
             check("CSV BOM + 한글 헤더", r.text.startswith("﻿") and "이벤트 ID" in r.text,
                   repr(r.text[:40]))
+
+            # ── 녹화 용량 상한 ─────────────────────────────────────────
+            # 미디어 서버는 시간 기반 회전까지만 할 수 있다. 용량 상한은 코어가 지키고,
+            # 그 규칙이 '오래된 것부터, 쓰고 있는 것은 빼고' 인지가 여기서 확인된다.
+            import time as _time
+
+            from aivision_server.services import recording as rec
+
+            root = get_settings().record_path / "cam" / "1"
+            root.mkdir(parents=True, exist_ok=True)
+            for name in ("old.mp4", "mid.mp4", "new.mp4"):
+                (root / name).write_bytes(b"x" * 400_000)
+            old_ts = _time.time() - 3600
+            os.utime(root / "old.mp4", (old_ts, old_ts))
+            os.utime(root / "mid.mp4", (old_ts + 600, old_ts + 600))
+            os.utime(root / "new.mp4", (old_ts + 1200, old_ts + 1200))
+
+            u = rec.usage()
+            check("녹화 용량 집계", u["files"] == 3 and u["bytes"] == 1_200_000, str(u))
+
+            r = await c.post("/api/system/record/purge")
+            check("상한 없으면 정리 거부 400", r.status_code == 400, r.text)
+
+            out = await rec.enforce_quota(max_gb=0)
+            check("상한 0 은 무제한", out["deleted"] == 0, str(out))
+
+            # 1.2MB 를 0.8MB 상한으로 누른다 -> 가장 오래된 하나가 지워져야 한다
+            out = await rec.enforce_quota(max_gb=800_000 / (1024 ** 3))
+            names = sorted(p.name for p in root.iterdir())
+            check("상한 초과 시 오래된 것부터 삭제",
+                  out["deleted"] == 1 and names == ["mid.mp4", "new.mp4"], f"{out} {names}")
+
+            # 아무리 좁혀도 마지막 한 건(쓰는 중일 수 있다)은 남긴다
+            out = await rec.enforce_quota(max_gb=1 / (1024 ** 3))
+            names = sorted(p.name for p in root.iterdir())
+            check("쓰는 중일 수 있는 최신 세그먼트는 남긴다", names == ["new.mp4"], f"{out} {names}")
+
+            r = await c.put("/api/settings", json={"record_max_gb": 5})
+            check("용량 상한 저장", r.json()["record_max_gb"] == 5, r.text)
+            sysinfo = (await c.get("/api/system")).json()
+            check("시스템 상태에 녹화 사용량 노출",
+                  sysinfo.get("record", {}).get("limit_gb") == 5, str(sysinfo.get("record")))
+            await c.put("/api/settings", json={"record_max_gb": 0})
 
             # ── 원문 적재 정책 ─────────────────────────────────────────
             # 기본은 남기지 않는다. 라이브 박스처럼 초당 여러 번 들어오는 트래픽을

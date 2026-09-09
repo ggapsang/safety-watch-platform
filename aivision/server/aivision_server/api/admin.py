@@ -63,6 +63,7 @@ async def get_settings_api(session: AsyncSession = Depends(get_session)) -> Sett
                                                 s.mqtt_log_retention_days)),
         snapshot_on_event=bool(runtime.get("snapshot_on_event", s.snapshot_on_event)),
         event_dedup_sec=float(runtime.get("event_dedup_sec", s.event_dedup_sec)),
+        record_max_gb=float(runtime.get("record_max_gb", s.record_max_gb) or 0),
     )
 
 
@@ -96,8 +97,16 @@ async def system_status(session: AsyncSession = Depends(get_session)) -> dict:
     media = await media_backend().health()
     from ..services import outbound as outbound_service
 
+    from ..services import recording as recording_service
+
+    runtime = await store.get_runtime(session)
+    record = recording_service.usage()
+    record["limit_gb"] = float(runtime.get("record_max_gb", s.record_max_gb) or 0)
+    record["over"] = bool(record["limit_gb"] and record["bytes"] > record["limit_gb"] * (1024 ** 3))
+
     return {
         "outbound": {"pending": await outbound_service.pending_count()},
+        "record": record,
         "detection_sources": registry.statuses(),
         "streams": manager.statuses(),
         "media": {"name": media.name, "available": media.available,
@@ -107,6 +116,24 @@ async def system_status(session: AsyncSession = Depends(get_session)) -> dict:
         "stream": {"fps": s.stream_fps, "jpeg_quality": s.jpeg_quality,
                    "max_width": s.stream_max_width},
     }
+
+
+@router.post("/system/record/purge")
+async def purge_recordings(session: AsyncSession = Depends(get_session)) -> dict:
+    """상시 녹화 용량 정리를 지금 실행한다.
+
+    주기 작업(5분)이 돌기를 기다리지 않고 확인하고 싶을 때 쓴다.
+    """
+    from ..services import recording as recording_service
+
+    s = get_settings()
+    runtime = await store.get_runtime(session)
+    max_gb = float(runtime.get("record_max_gb", s.record_max_gb) or 0)
+    if max_gb <= 0:
+        raise HTTPException(status_code=400,
+                            detail="용량 상한이 설정돼 있지 않습니다. 운영 설정에서 먼저 정하세요.")
+    result = await recording_service.enforce_quota(max_gb)
+    return {**result, "usage": recording_service.usage()}
 
 
 @router.post("/system/mqtt-log/purge")

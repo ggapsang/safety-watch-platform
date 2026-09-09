@@ -75,8 +75,26 @@ async def _purge_logs() -> None:
         log.info("MQTT 원문 로그 정리: %d건 삭제 (보존 %d일)", result.rowcount, keep)
 
 
+async def _enforce_record_quota() -> None:
+    """상시 녹화가 상한을 넘었으면 오래된 세그먼트부터 지운다.
+
+    미디어 서버는 시간 기반 회전까지만 할 수 있어 용량 상한은 코어가 지킨다.
+    설정을 화면에서 바꿀 수 있으므로 매번 읽는다 — 5분에 한 번이라 부담이 없다.
+    """
+    from .recording import enforce_quota
+
+    s = get_settings()
+    async with sessionmaker()() as session:
+        runtime = await get_runtime(session)
+    max_gb = float(runtime.get("record_max_gb", s.record_max_gb) or 0)
+    if max_gb <= 0:
+        return
+    await enforce_quota(max_gb)
+
+
 async def run() -> None:
     last_purge = 0.0
+    last_quota = 0.0
     loop = asyncio.get_running_loop()
     while True:
         try:
@@ -84,6 +102,9 @@ async def run() -> None:
             if loop.time() - last_purge > PURGE_INTERVAL:
                 last_purge = loop.time()
                 await _purge_logs()
+            if loop.time() - last_quota > get_settings().record_quota_interval_sec:
+                last_quota = loop.time()
+                await _enforce_record_quota()
         except asyncio.CancelledError:
             raise
         except Exception:                                    # noqa: BLE001

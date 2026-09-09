@@ -26,7 +26,7 @@ import {
   cx,
 } from "../components/ui";
 import { api, ApiError } from "../lib/api";
-import { fmtAgo } from "../lib/format";
+import { fmtAgo, fmtHours } from "../lib/format";
 import { useCameras, useClock, useLiveBoxes } from "../lib/hooks";
 import type { Camera } from "../lib/types";
 
@@ -109,13 +109,14 @@ export function Cameras() {
               "IP",
               "최근 수신",
               "오늘 / 누적",
+              "녹화",
               "",
             ]}
           >
             {isLoading ? (
-              <EmptyRow colSpan={7} text="불러오는 중…" />
+              <EmptyRow colSpan={8} text="불러오는 중…" />
             ) : shown.length === 0 ? (
-              <EmptyRow colSpan={7} text="조건에 맞는 카메라가 없습니다." />
+              <EmptyRow colSpan={8} text="조건에 맞는 카메라가 없습니다." />
             ) : (
               shown.map((c) => (
                 <tr
@@ -142,6 +143,9 @@ export function Cameras() {
                   <Td className="tnum whitespace-nowrap">
                     {c.today} / {c.total}
                   </Td>
+                  <Td>
+                    <RecordToggle camera={c} />
+                  </Td>
                   <Td className="text-right">
                     <Button size="sm" onClick={() => setEditing(c)}>
                       수정
@@ -161,6 +165,48 @@ export function Cameras() {
 
       <QuickEdit camera={editing} onClose={() => setEditing(null)} />
     </>
+  );
+}
+
+/** 카메라별 녹화 켜고 끄기.
+ *
+ * 관리자 폼 안쪽에만 두었더니 켜져 있는지조차 눈에 띄지 않아, 하룻밤에 1.6GB 가 쌓이는 것을
+ * 아무도 모르는 일이 있었다. 현장에서 가장 자주 손대는 스위치라 목록에서 바로 만지게 한다.
+ * 보존 시간처럼 한 번 정하고 두는 값은 관리자 화면에 남긴다.
+ */
+function RecordToggle({ camera }: { camera: Camera }) {
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: (on: boolean) => api.patchCamera(camera.id, { record_enabled: on }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cameras"] }),
+  });
+
+  const on = camera.record_enabled;
+  return (
+    <div className="flex items-center gap-2 whitespace-nowrap">
+      <button
+        type="button"
+        disabled={save.isPending}
+        onClick={() => save.mutate(!on)}
+        aria-pressed={on}
+        title={on ? "녹화를 끕니다" : "녹화를 켭니다"}
+        className={cx(
+          "relative h-[19px] w-[34px] shrink-0 rounded-full transition-colors",
+          on ? "bg-primary" : "bg-hairline",
+          save.isPending && "opacity-50",
+        )}
+      >
+        <span
+          className={cx(
+            "absolute top-[2px] h-[15px] w-[15px] rounded-full bg-canvas transition-all",
+            on ? "left-[17px]" : "left-[2px]",
+          )}
+        />
+      </button>
+      <span className={cx("text-[12px]", on ? "text-body" : "text-muted-soft")}>
+        {on ? fmtHours(camera.record_retention_hours) : "안 함"}
+      </span>
+    </div>
   );
 }
 

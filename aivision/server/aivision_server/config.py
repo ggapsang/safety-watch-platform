@@ -64,7 +64,9 @@ class Settings(BaseSettings):
     mediamtx_rtsp_host: str = "base-media:8554"           # 분석 모듈이 가져가는 곳
     # 브라우저가 WebRTC/HLS 로 붙을 주소. 컨테이너 이름이 아니라 '밖에서 보이는' 주소여야 한다.
     mediamtx_public_url: str = "http://localhost:11884"
-    mediamtx_record_dir: str = "/recordings"              # 미디어 서버 컨테이너 안의 경로
+    # 미디어 서버 컨테이너 안에서 세그먼트를 쓰는 경로(미디어 서버에게 알려 주는 값).
+    # 아래 record_dir 은 같은 볼륨을 코어 컨테이너에서 보는 경로다. 값이 같아도 주체가 다르다.
+    mediamtx_record_dir: str = "/recordings"
 
     # ── 영상 ────────────────────────────────────────────────────────────
     stream_fps: float = 12.0                   # MJPEG 송출 상한
@@ -86,6 +88,18 @@ class Settings(BaseSettings):
     clip_post_sec: float = 10.0
     # 클립은 코어 자산이라 우리 저장소에 둔다(미디어 서버의 세그먼트 회전과 무관해야 한다).
     clip_dir: Path = Path("./data/clips")
+    # 상시 녹화 세그먼트가 쌓이는 곳. 쓰는 것은 미디어 서버지만 코어도 같은 폴더를 본다 —
+    # '용량이 얼마나 찼나'와 '넘치면 무엇부터 버리나'는 정책이고, 미디어 서버는 시간 기반
+    # 회전(recordDeleteAfter)까지만 할 수 있기 때문이다.
+    record_dir: Path = Path("./data/recordings")
+    # 상시 녹화 전체 용량 상한(GB). 0 이면 제한하지 않는다.
+    #
+    # 카메라별이 아니라 전체 하나로 두는 이유: 디스크가 하나라서다. 카메라마다 상한을 주면
+    # 합이 디스크를 넘을 수 있어 정작 막고 싶었던 사고를 못 막는다.
+    # 화면에서 바꿀 수 있게 runtime 설정으로도 덮어쓸 수 있다.
+    record_max_gb: float = 0.0
+    # 용량 정리를 얼마나 자주 볼지(초).
+    record_quota_interval_sec: float = 300.0
 
     # ── 이벤트 ──────────────────────────────────────────────────────────
     snapshot_dir: Path = Path("./data/snapshots")
@@ -102,6 +116,12 @@ class Settings(BaseSettings):
     @property
     def clip_path(self) -> Path:
         p = Path(self.clip_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def record_path(self) -> Path:
+        p = Path(self.record_dir)
         p.mkdir(parents=True, exist_ok=True)
         return p
 

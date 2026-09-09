@@ -75,7 +75,7 @@ class MediaBackend(ABC):
     async def stream_info(self, camera_id: int) -> StreamInfo | None: ...
 
     async def set_recording(self, camera_id: int, enabled: bool,
-                            retention_days: int = 3) -> bool:
+                            retention_hours: int = 72) -> bool:
         """상시 녹화 on/off. 지원하지 않으면 False."""
         return False
 

@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +31,10 @@ from ..models import Camera, Event, Recording
 from ..timeutil import as_utc
 
 log = logging.getLogger(__name__)
+
+GB = 1024 ** 3
+# 이 시간 안에 쓰인 파일은 건드리지 않는다. 미디어 서버가 열어 두고 있을 수 있다.
+ACTIVE_SEGMENT_SEC = 120.0
 
 
 # ────────────────────────────────────────────────────────────── 정책 반영
@@ -41,7 +48,7 @@ async def apply_policy(session: AsyncSession, camera: Camera) -> bool:
                         media.name, camera.id)
         return False
     return await media.set_recording(camera.id, camera.record_enabled,
-                                     camera.record_retention_days)
+                                     camera.record_retention_hours)
 
 
 async def apply_all(session: AsyncSession) -> None:
@@ -57,6 +64,95 @@ async def apply_all(session: AsyncSession) -> None:
 async def timeline(camera_id: int, start: datetime, end: datetime) -> list[Segment]:
     """구간 안의 녹화 세그먼트. 미디어 서버에 물어본다(DB 미러링 없음)."""
     return await media_backend().list_segments(camera_id, start, end)
+
+
+# ────────────────────────────────────────────────────────── 용량 상한
+
+def _segment_files() -> list[Path]:
+    """상시 녹화 세그먼트 파일 목록. 오래된 것부터 정렬해 돌려준다.
+
+    파일을 쓰는 것은 미디어 서버지만 용량 판단은 코어의 몫이다(설계 문서의 책임 분리).
+    미디어 서버는 시간 기반 회전(recordDeleteAfter)까지만 할 수 있어서, 용량 상한은
+    여기서 지켜야 한다.
+    """
+    root = get_settings().record_path
+    files = [p for p in root.rglob("*") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime)
+    return files
+
+
+def usage() -> dict:
+    """지금 얼마나 차 있나. 화면과 정리 로직이 같은 값을 본다."""
+    s = get_settings()
+    files = _segment_files()
+    total = sum(p.stat().st_size for p in files)
+    limit = _limit_bytes(s.record_max_gb)
+    try:
+        disk = shutil.disk_usage(s.record_path)
+        free = disk.free
+    except OSError:
+        free = 0
+    return {
+        "bytes": total,
+        "gb": round(total / GB, 2),
+        "files": len(files),
+        "limit_gb": s.record_max_gb,
+        "over": bool(limit and total > limit),
+        "disk_free_gb": round(free / GB, 1),
+    }
+
+
+def _limit_bytes(max_gb: float) -> int:
+    return int(max_gb * GB) if max_gb and max_gb > 0 else 0
+
+
+async def enforce_quota(max_gb: float | None = None) -> dict:
+    """상한을 넘으면 **오래된 세그먼트부터** 지운다.
+
+    지키는 규칙 둘.
+      · 카메라별로 나누지 않는다. 디스크가 하나라서, 카메라마다 상한을 주면 합이 디스크를
+        넘을 수 있어 정작 막고 싶었던 사고를 못 막는다.
+      · **가장 최근 파일은 건드리지 않는다.** 미디어 서버가 지금 쓰고 있는 세그먼트일 수
+        있다. 열려 있는 파일을 지우면 녹화가 깨지거나 공간이 실제로 반환되지 않는다.
+
+    실제 지운 바이트 수를 돌려준다.
+    """
+    s = get_settings()
+    limit = _limit_bytes(s.record_max_gb if max_gb is None else max_gb)
+    if not limit:
+        return {"deleted": 0, "bytes": 0, "limit_gb": 0}
+
+    files = _segment_files()
+    total = sum(p.stat().st_size for p in files)
+    if total <= limit:
+        return {"deleted": 0, "bytes": 0, "limit_gb": limit / GB}
+
+    freed, removed = 0, 0
+    now = time.time()
+    # 마지막 한 건은 남긴다(쓰고 있을 수 있다). 최근에 손댄 파일도 건너뛴다.
+    for path in files[:-1]:
+        if total - freed <= limit:
+            break
+        try:
+            stat = path.stat()
+            if now - stat.st_mtime < ACTIVE_SEGMENT_SEC:
+                continue
+            size = stat.st_size
+            path.unlink()
+        except OSError as exc:
+            log.warning("세그먼트 삭제 실패 %s: %s", path.name, exc)
+            continue
+        freed += size
+        removed += 1
+        log.info("용량 초과 정리: %s (%.1fMB)", path.name, size / 1024 / 1024)
+
+    if removed:
+        log.info("상시 녹화 정리 완료: %d개 · %.2fGB 확보 (상한 %.1fGB)",
+                 removed, freed / GB, limit / GB)
+    elif total > limit:
+        log.warning("용량이 상한(%.1fGB)을 넘었지만 지울 수 있는 세그먼트가 없습니다 "
+                    "— 쓰는 중이거나 파일이 하나뿐입니다", limit / GB)
+    return {"deleted": removed, "bytes": freed, "limit_gb": limit / GB}
 
 
 # ────────────────────────────────────────────────────────────── 이벤트 클립

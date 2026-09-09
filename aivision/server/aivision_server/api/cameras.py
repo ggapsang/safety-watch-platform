@@ -47,7 +47,7 @@ def to_dto(cam: Camera, *, today: int = 0, total: int = 0) -> CameraOut:
         stream_url=f"/api/stream/{cam.id}",
         rtsp_url=getattr(manager.stream_info(cam.id), "rtsp", "") or "",
         record_enabled=cam.record_enabled,
-        record_retention_days=cam.record_retention_days,
+        record_retention_hours=cam.record_retention_hours,
         today=today, total=total,
     )
 
@@ -131,7 +131,7 @@ async def create_camera(body: CameraCreate,
         mac=body.mac, vendor=body.vendor.strip().upper(), model=body.model.strip(),
         enabled=body.enabled,
         record_enabled=body.record_enabled,
-        record_retention_days=max(1, body.record_retention_days),
+        record_retention_hours=max(1, body.record_retention_hours),
     )
     session.add(cam)
     try:

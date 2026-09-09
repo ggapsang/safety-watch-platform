@@ -121,6 +121,11 @@ export const api = {
   saveSettings: (body: Partial<AppSettings>) =>
     request<AppSettings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
   system: () => request<SystemStatus>("/api/system"),
+  /** 상시 녹화 용량 정리를 지금 실행 (주기 작업을 기다리지 않고 확인할 때) */
+  purgeRecordings: () =>
+    request<{ deleted: number; bytes: number; limit_gb: number }>("/api/system/record/purge", {
+      method: "POST",
+    }),
 
   // ── 아웃바운드 ────────────────────────────────────────────────────
   outboundTargets: () => request<OutboundTarget[]>("/api/outbound/targets"),

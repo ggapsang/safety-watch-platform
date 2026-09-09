@@ -31,7 +31,7 @@ import {
   cx,
 } from "../components/ui";
 import { api, ApiError } from "../lib/api";
-import { fmtAgo } from "../lib/format";
+import { fmtAgo, fmtBytes, fmtHours } from "../lib/format";
 import { useCameras, useSettings, useSystem } from "../lib/hooks";
 import { BindingAdmin } from "./BindingAdmin";
 import { OutboundAdmin } from "./OutboundAdmin";
@@ -58,7 +58,7 @@ const EMPTY: CameraInput = {
   note: "",
   enabled: true,
   record_enabled: false,
-  record_retention_days: 3,
+  record_retention_hours: 72,
 };
 
 export function Admin() {
@@ -130,7 +130,7 @@ function CameraAdmin() {
                     <span className="ml-1 text-muted-soft">{c.rtsp_path}</span>
                   </Td>
                   <Td className="whitespace-nowrap text-muted">
-                    {c.record_enabled ? `${c.record_retention_days}일 보존` : "안 함"}
+                    {c.record_enabled ? fmtHours(c.record_retention_hours) + " 보존" : "안 함"}
                   </Td>
                   <Td className="whitespace-nowrap text-muted">
                     {c.last_seen_at ? fmtAgo(c.last_seen_at) : "-"}
@@ -211,7 +211,7 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
             note: camera.note,
             enabled: camera.enabled,
             record_enabled: camera.record_enabled,
-            record_retention_days: camera.record_retention_days,
+            record_retention_hours: camera.record_retention_hours,
           }
         : EMPTY,
     );
@@ -368,18 +368,21 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
           />
           {form.record_enabled && (
             <Field
-              label="보존 기간 (일)"
-              className="mt-4 max-w-[220px]"
-              hint="이 기간이 지난 상시 녹화는 자동 삭제됩니다. 이벤트 클립은 따로 보관되어 남습니다."
+              label="보존 시간"
+              className="mt-4 max-w-[260px]"
+              hint="이 시간이 지난 상시 녹화는 자동 삭제됩니다. 이벤트 클립은 따로 보관되어 남습니다."
             >
               <Input
                 type="number"
                 min={1}
-                value={form.record_retention_days}
+                value={form.record_retention_hours}
                 onChange={(e) =>
-                  set("record_retention_days", Math.max(1, Number(e.target.value) || 1))
+                  set("record_retention_hours", Math.max(1, Number(e.target.value) || 1))
                 }
               />
+              <p className="mt-1 text-[11.5px] text-muted-soft">
+                {fmtHours(form.record_retention_hours)}
+              </p>
             </Field>
           )}
         </fieldset>
@@ -414,9 +417,53 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
 
 type LogMode = AppSettings["mqtt_log_mode"];
 
+/** 지금 얼마나 차 있나. 숫자를 보여 줘야 상한을 얼마로 둘지 정할 수 있다. */
+function RecordUsage() {
+  const qc = useQueryClient();
+  const { data: sys } = useSystem();
+  const rec = sys?.record;
+  const purge = useMutation({
+    mutationFn: () => api.purgeRecordings(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["system"] }),
+  });
+
+  if (!rec) return null;
+  return (
+    <div className="rounded-lg border border-hairline bg-surface-soft p-4">
+      <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[12.5px]">
+        <span className="text-muted">
+          현재 사용 <b className="tnum font-semibold text-body-strong">{fmtBytes(rec.bytes)}</b>
+          <span className="text-muted-soft"> · 파일 {rec.files}개</span>
+        </span>
+        <span className="text-muted">
+          디스크 여유 <b className="tnum font-semibold text-body">{rec.disk_free_gb}GB</b>
+        </span>
+        {rec.limit_gb > 0 && (
+          <span className={rec.over ? "font-semibold text-error" : "text-muted"}>
+            상한 {rec.limit_gb}GB {rec.over && "— 초과, 정리 대기 중"}
+          </span>
+        )}
+      </div>
+      {rec.limit_gb > 0 && (
+        <div className="mt-3">
+          <Button size="sm" disabled={purge.isPending} onClick={() => purge.mutate()}>
+            지금 정리
+          </Button>
+          {purge.data && (
+            <span className="ml-3 text-[12px] text-success">
+              {purge.data.deleted}개 삭제 · {fmtBytes(purge.data.bytes)} 확보
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsAdmin() {
   const qc = useQueryClient();
   const { data: settings } = useSettings();
+  const [maxGb, setMaxGb] = useState(0);
   const [logMode, setLogMode] = useState<LogMode>("off");
   const [logTopics, setLogTopics] = useState("");
   const [retention, setRetention] = useState(7);
@@ -427,6 +474,7 @@ function SettingsAdmin() {
   useEffect(() => {
     if (!settings) return;
     setRetention(settings.mqtt_log_retention_days);
+    setMaxGb(settings.record_max_gb);
     setLogMode(settings.mqtt_log_mode);
     setLogTopics(settings.mqtt_log_topics);
     setDedup(settings.event_dedup_sec);
@@ -436,6 +484,7 @@ function SettingsAdmin() {
   const save = useMutation({
     mutationFn: () =>
       api.saveSettings({
+        record_max_gb: maxGb,
         mqtt_log_mode: logMode,
         mqtt_log_topics: logTopics,
         mqtt_log_retention_days: retention,
@@ -533,6 +582,29 @@ function SettingsAdmin() {
                 보존기간 지난 MQTT 로그 지금 정리
               </Button>
             </div>
+          </div>
+        </Card>
+
+        <Card>
+          <CardTitle
+            title="상시 녹화 용량"
+            desc="디스크가 하나이므로 상한도 전체 하나로 둡니다."
+          />
+          <div className="grid gap-4">
+            <Field
+              label="전체 용량 상한 (GB)"
+              hint="넘으면 가장 오래된 영상부터 지웁니다. 0 이면 제한하지 않습니다.
+                    카메라별 보존 시간은 카메라 설정에서 따로 정합니다."
+            >
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                value={maxGb}
+                onChange={(e) => setMaxGb(Math.max(0, Number(e.target.value) || 0))}
+              />
+            </Field>
+            <RecordUsage />
           </div>
         </Card>
 

@@ -65,7 +65,7 @@ class CameraOut(BaseModel):
     stream_url: str                # MJPEG 주소 (브라우저용)
     rtsp_url: str = ""             # 분석 모듈이 영상을 가져가는 곳 (미디어 서버 경유)
     record_enabled: bool = False
-    record_retention_days: int = 3
+    record_retention_hours: int = 72
     today: int = 0                 # 금일 이벤트 수
     total: int = 0                 # 누적 이벤트 수
 
@@ -91,7 +91,7 @@ class CameraCreate(BaseModel):
     note: str = ""
     enabled: bool = True
     record_enabled: bool = False
-    record_retention_days: int = 3
+    record_retention_hours: int = 72
     sols: list[str] = Field(default_factory=list)
 
     @field_validator("mac")
@@ -116,7 +116,7 @@ class CameraPatch(BaseModel):
     note: str | None = None
     enabled: bool | None = None
     record_enabled: bool | None = None
-    record_retention_days: int | None = None
+    record_retention_hours: int | None = None
     sols: list[str] | None = None
 
     @field_validator("mac")
@@ -429,6 +429,8 @@ class SettingsOut(BaseModel):
     mqtt_log_retention_days: int
     snapshot_on_event: bool
     event_dedup_sec: float
+    # 상시 녹화 전체 용량 상한(GB). 0 이면 제한 없음.
+    record_max_gb: float
 
 
 class SettingsPatch(BaseModel):
@@ -437,3 +439,4 @@ class SettingsPatch(BaseModel):
     mqtt_log_retention_days: int | None = None
     snapshot_on_event: bool | None = None
     event_dedup_sec: float | None = None
+    record_max_gb: float | None = None

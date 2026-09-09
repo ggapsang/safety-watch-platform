@@ -77,7 +77,8 @@ class Camera(Base):
     # ── 녹화 정책 ────────────────────────────────────────────────────
     # 바이트를 쓰는 일은 미디어 서버가 하지만, 무엇을 언제 녹화할지는 코어가 정한다.
     record_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    record_retention_days: Mapped[int] = mapped_column(Integer, default=3)
+    # 보존 시간. 일 단위로는 "6시간만 두고 싶다" 같은 요구를 표현할 수 없어 시간으로 둔다.
+    record_retention_hours: Mapped[int] = mapped_column(Integer, default=72)
 
     # 온라인 여부는 '영상 수신' 또는 'MQTT heartbeat' 중 하나라도 살아 있으면 True.
     online: Mapped[bool] = mapped_column(Boolean, default=False)

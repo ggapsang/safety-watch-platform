@@ -35,7 +35,7 @@ export interface Camera {
   stream_url: string;
   rtsp_url: string;
   record_enabled: boolean;
-  record_retention_days: number;
+  record_retention_hours: number;
   today: number;
   total: number;
 }
@@ -53,7 +53,7 @@ export interface CameraInput {
   note: string;
   enabled: boolean;
   record_enabled: boolean;
-  record_retention_days: number;
+  record_retention_hours: number;
 }
 
 export interface CameraTestResult {
@@ -220,6 +220,8 @@ export interface AppSettings {
   /** 특정 채널만 남길 때. 채우면 mode 보다 우선한다 */
   mqtt_log_topics: string;
   mqtt_log_retention_days: number;
+  /** 상시 녹화 전체 용량 상한(GB). 0 이면 제한 없음 */
+  record_max_gb: number;
   snapshot_on_event: boolean;
   event_dedup_sec: number;
 }
@@ -256,6 +258,15 @@ export interface SystemStatus {
     messages_1h: number;
   };
   stream: { fps: number; jpeg_quality: number; max_width: number };
+  /** 상시 녹화가 지금 얼마나 차 있나 */
+  record?: {
+    bytes: number;
+    gb: number;
+    files: number;
+    limit_gb: number;
+    over: boolean;
+    disk_free_gb: number;
+  };
 }
 
 /** 서버 → 브라우저 푸시 (WebSocket) */
