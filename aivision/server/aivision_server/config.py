@@ -9,7 +9,6 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -120,9 +119,6 @@ class Settings(BaseSettings):
     # 실장비는 탐지 active 1회 → 약 15초 후 inactive 1회를 발행한다.
     event_dedup_sec: float = 20.0
 
-    # ── 보안 ────────────────────────────────────────────────────────────
-    # Fernet 키. 카메라 비밀번호 암호화에 쓴다.
-    secret_key: str = Field(default="", repr=False)
 
     @property
     def clip_path(self) -> Path:

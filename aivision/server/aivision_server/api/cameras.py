@@ -13,7 +13,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
-from ..crypto import encrypt
 from ..db import get_session
 from ..detection.registry import registry
 from ..models import Camera, CameraSolution, Event, Solution
@@ -37,7 +36,7 @@ def to_dto(cam: Camera, *, today: int = 0, total: int = 0) -> CameraOut:
     return CameraOut(
         id=cam.id, name=cam.name, location=cam.location, note=cam.note,
         ip=cam.ip, rtsp_port=cam.rtsp_port, rtsp_path=cam.rtsp_path,
-        username=cam.username, has_password=bool(cam.password_enc),
+        username=cam.username, has_password=bool(cam.password),
         mac=cam.mac, vendor=cam.vendor, model=cam.model,
         enabled=cam.enabled,
         status="normal" if (cam.enabled and online) else "offline",
@@ -167,7 +166,7 @@ async def create_camera(body: CameraCreate,
         name=body.name.strip() or ip, location=body.location.strip() or ip,
         note=body.note.strip(),
         ip=ip, rtsp_port=body.rtsp_port, rtsp_path=body.rtsp_path.strip(),
-        username=body.username.strip(), password_enc=encrypt(body.password),
+        username=body.username.strip(), password=body.password,
         mac=body.mac, vendor=body.vendor.strip().upper(), model=body.model.strip(),
         enabled=body.enabled,
         rtsp_path_sub=(body.rtsp_path_sub or "").strip(),
@@ -209,7 +208,7 @@ async def patch_camera(camera_id: int, body: CameraPatch,
     for key, value in data.items():
         setattr(cam, key, value.strip() if isinstance(value, str) else value)
     if password:                                # 빈 문자열이면 '변경 없음'
-        cam.password_enc = encrypt(password)
+        cam.password = password
     if sols is not None:
         await _apply_solutions(session, cam, sols)
 

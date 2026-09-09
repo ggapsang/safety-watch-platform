@@ -53,10 +53,7 @@ VMS 의 일부 기능을 갖습니다. 영상을 받기만 하는 것이 아니�
 
 ```bash
 cd aivision/deploy
-cp .env.example .env
-# SECRET_KEY 생성 후 .env 에 붙여 넣습니다 (카메라 비밀번호 암호화 키)
-python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"
-
+cp .env.example .env      # 그대로 두어도 뜹니다. 포트나 저장 위치만 필요할 때 고치세요
 docker compose up -d --build
 ```
 
@@ -134,7 +131,15 @@ docker compose --profile meta --profile yolo up -d --build   # 전부
 
 **연결 테스트** 버튼은 실제로 RTSP 를 열어 첫 프레임을 받아 보고 해상도를 알려 줍니다.
 
-비밀번호는 `SECRET_KEY` 로 암호화해 저장하며 API 응답에 실리지 않습니다.
+비밀번호는 **평문으로 저장합니다.** 전에는 Fernet 으로 암호화했지만 키를 DB 옆(`.env`)에
+두는 구조라 보호가 되지 않았습니다 — DB 에 닿는 사람은 키에도 닿습니다. 그러면서 "키를
+잃으면 비밀번호를 못 읽는다"는 함정만 남았습니다. 폐쇄망 전제이므로 가장하지 않기로 했습니다.
+
+API 응답에는 여전히 싣지 않습니다(`has_password` 로만 알립니다). 보호라기보다, 카메라
+목록을 부를 때마다 자격증명이 오갈 이유가 없기 때문입니다.
+
+> 열려 있는 DB 포트(11882)로 누구나 읽을 수 있다는 뜻입니다. 닿을 수 있는 망에 올릴
+> 계획이라면 그 포트부터 닫으십시오.
 
 ## 미디어 평면 — fan-out · 녹화
 

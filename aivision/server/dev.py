@@ -38,13 +38,6 @@ def main() -> int:
     os.environ.setdefault("MQTT_HOST", "localhost")
     os.environ.setdefault("MQTT_PORT", "1883")
     os.environ.setdefault("MQTT_WS_URL", "ws://localhost:11881")
-    if not os.environ.get("SECRET_KEY"):
-        # 개발용 임시 키. 재시작하면 바뀌므로 저장된 카메라 비밀번호는 복호화되지 않는다.
-        from cryptography.fernet import Fernet
-
-        os.environ["SECRET_KEY"] = Fernet.generate_key().decode()
-        print("주의: SECRET_KEY 미설정 — 임시 키를 생성했습니다(재시작 시 카메라 비밀번호 재입력 필요).")
-
     import uvicorn
 
     uvicorn.run("aivision_server.main:app", host=args.host, port=args.port,

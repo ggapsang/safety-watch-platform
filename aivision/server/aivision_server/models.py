@@ -75,7 +75,14 @@ class Camera(Base):
     # 그 대신 서버의 디코딩 부담이 크게 준다.
     rtsp_path_sub: Mapped[str] = mapped_column(String(200), default="")
     username: Mapped[str] = mapped_column(String(64), default="")
-    password_enc: Mapped[str] = mapped_column(Text, default="")      # Fernet 암호문
+    # RTSP 계정 비밀번호. 평문으로 둔다.
+    #
+    # 전에는 Fernet 으로 암호화했지만 키를 DB 옆(.env)에 두는 구조라 보호가 되지 않았다.
+    # DB 에 닿는 사람은 키에도 닿는다. 그러면서 '키를 잃으면 비밀번호를 못 읽는다' 는
+    # 함정만 남았다. 폐쇄망 전제이므로 가장하지 않고 평문으로 둔다.
+    # API 응답에는 여전히 싣지 않는다(has_password 로만 알린다) — 보호라기보다,
+    # 카메라 목록을 부를 때마다 자격증명이 오갈 이유가 없기 때문이다.
+    password: Mapped[str] = mapped_column(Text, default="")
     # 카메라가 MQTT 로 발행할 때 토픽 접두로 쓰는 MAC. 대문자 콜론 표기(E4:30:22:...).
     mac: Mapped[str] = mapped_column(String(23), default="", index=True)
     vendor: Mapped[str] = mapped_column(String(32), default="HANWHA")

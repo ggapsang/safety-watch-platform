@@ -12,7 +12,6 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./.smoke.db"
-os.environ["SECRET_KEY"] = "y_1fd6RE10V1ajlaE-mBAfLMRYjQDQZ2Q9_HzwDH-4M="
 os.environ["MQTT_HOST"] = "127.0.0.1"
 os.environ["SNAPSHOT_DIR"] = "./.smoke-snap"
 os.environ["RECORD_DIR"] = "./.smoke-rec"
@@ -92,6 +91,8 @@ async def main() -> int:
             cam = r.json()
             cid = cam["id"]
             check("MAC 정규화", cam["mac"] == "E4:30:22:F3:31:AA", cam["mac"])
+            # 평문으로 저장하지만 목록 응답에는 싣지 않는다. 보호라기보다, 카메라 목록을
+            # 부를 때마다 자격증명이 오갈 이유가 없어서다.
             check("비밀번호 미노출", "password" not in cam and cam["has_password"] is True)
             check("중복 등록 409",
                   (await c.post("/api/cameras", json={"ip": "192.168.10.11"})).status_code == 409)

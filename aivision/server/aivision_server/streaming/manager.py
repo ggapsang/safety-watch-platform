@@ -22,7 +22,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
-from ..crypto import decrypt
 from ..models import Camera
 from .worker import CameraWorker
 
@@ -38,10 +37,9 @@ def rtsp_url(cam: Camera, *, sub: bool = False) -> str:
     path = (cam.rtsp_path_sub if sub else cam.rtsp_path) or ("" if sub else "/")
     if not path:
         return ""
-    pw = decrypt(cam.password_enc)
     cred = ""
     if cam.username:
-        cred = f"{quote(cam.username, safe='')}:{quote(pw, safe='')}@"
+        cred = f"{quote(cam.username, safe='')}:{quote(cam.password, safe='')}@"
     port = cam.rtsp_port or 554
     host = f"{cam.ip}:{port}" if port != 554 else cam.ip
     if not path.startswith("/"):
