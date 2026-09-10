@@ -104,8 +104,11 @@ export function Shell({ live, children }: { live: LiveState; children: ReactNode
             alt="DAIM Technology"
             className="block w-full max-w-[168px]"
           />
-          <div className="mt-[14px] text-[12.5px] tracking-[-.01em] text-muted">
-            <b className="font-semibold text-ink">AI Safety Watch</b> Platform
+          {/* 제품명은 통째로 한 덩어리다. 예전 이름('AI Vision 통합관제 대시보드')은
+            * 브랜드를 굵게, 한글 설명을 얇게 나눴는데 지금은 Platform 까지가 이름이라
+            * 그 분리가 뜻을 왜곡한다. */}
+          <div className="mt-[14px] text-center text-[15px] font-semibold tracking-[-.01em] text-ink">
+            AI Safety Watch Platform
           </div>
         </div>
 
