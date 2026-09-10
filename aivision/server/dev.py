@@ -19,7 +19,7 @@ import sys
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="AI Vision 서버 (개발용)")
+    p = argparse.ArgumentParser(description="AI Safety Watch 서버 (개발용)")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true", help="코드 변경 시 자동 재시작")

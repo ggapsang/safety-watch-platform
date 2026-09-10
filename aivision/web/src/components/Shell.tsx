@@ -1,6 +1,6 @@
 /** 앱 껍데기 — 좌측 내비게이션 + 상단 바.
  *
- * 좌상단은 DAIM 로고, 그 아래에 서비스명(AI Vision 통합관제 대시보드)이 온다.
+ * 좌상단은 DAIM 로고, 그 아래에 서비스명(AI Safety Watch Platform)이 온다.
  * 내비게이션은 '관제 / 분석 / 운영' 세 묶음이다.
  */
 import type { ReactNode } from "react";
@@ -105,7 +105,7 @@ export function Shell({ live, children }: { live: LiveState; children: ReactNode
             className="block w-full max-w-[168px]"
           />
           <div className="mt-[14px] text-[12.5px] tracking-[-.01em] text-muted">
-            <b className="font-semibold text-ink">AI Vision</b> 통합관제 대시보드
+            <b className="font-semibold text-ink">AI Safety Watch</b> Platform
           </div>
         </div>
 

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # ── 기본 ────────────────────────────────────────────────────────────
-    app_name: str = "AI Vision 통합관제 대시보드"
+    app_name: str = "AI Safety Watch Platform"
     log_level: str = "INFO"
     static_dir: Path = Path("static")          # 빌드된 SPA (Dockerfile 이 복사)
     # 커밋할 수 있는 설정(탐지 항목·바인딩·운영 설정)이 사는 파일. 이것이 원본이고
