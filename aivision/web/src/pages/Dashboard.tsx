@@ -6,7 +6,7 @@
  *
  * 배치
  *   왼쪽 절반  : 필름 스트립(작은 미리보기가 세로로 쌓임) + 고른 카메라의 큰 화면
- *   오른쪽 절반 : KPI 를 세로로 쌓고 아래는 비워 둔다(나중에 채울 자리)
+ *   오른쪽 절반 : KPI 를 세로로 쌓고, 그 옆에 가장 최근 이벤트의 스냅샷
  *   아래       : 최근 이벤트
  *
  * 스트립은 스냅샷, 큰 화면만 MJPEG 이다. 이유는 CameraStrip.tsx 주석 참조.
@@ -18,6 +18,7 @@ import { CameraStrip } from "../components/CameraStrip";
 import { EventDetail } from "../components/EventDetail";
 import { LiveVideo } from "../components/LiveVideo";
 import { Card, EmptyRow, Section, Table, Td, cx } from "../components/ui";
+import { api } from "../lib/api";
 import { fmtAgo, fmtShort } from "../lib/format";
 import { useCameras, useClock, useEvents, useLiveBoxes, useSummary } from "../lib/hooks";
 import type { SafetyEvent } from "../lib/types";
@@ -89,6 +90,8 @@ export function Dashboard() {
 
   const current = cameras.find((c) => c.id === camId) ?? null;
   const events = recent?.items ?? [];
+  // 목록은 최신순이므로 앞에서부터 사진이 있는 첫 건이 '가장 최근 스냅샷' 이다.
+  const latestSnap = events.find((e) => e.has_snapshot) ?? null;
 
   return (
     <>
@@ -127,7 +130,7 @@ export function Dashboard() {
           )}
         </Section>
 
-        {/* ── 오른쪽 절반: 현황 셀(왼쪽) + LLM 자리(오른쪽) ─────────── */}
+        {/* ── 오른쪽 절반: 현황 셀(왼쪽) + 최근 이벤트 스냅샷(오른쪽) ── */}
         <Section title="현황" desc="누르면 해당 목록으로 이동합니다" className="mb-0">
           <div className="grid h-[420px] gap-3 [grid-template-columns:minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col gap-[10px] overflow-y-auto pr-1">
@@ -171,19 +174,55 @@ export function Dashboard() {
             />
           </div>
 
-          {/* LLM 이 들어올 자리.
+          {/* 가장 최근 이벤트의 스냅샷.
             *
-            * 축적된 이벤트를 읽어 요약·질의응답을 하는 부분이 여기 붙는다. 지금 비워 두되
-            * 무엇이 올 자리인지는 적어 둔다 — 점선 빈 칸만 있으면 '덜 만든 화면' 으로 보이고,
-            * 나중에 붙일 때 크기가 맞지 않아 옆 셀까지 다시 짜게 된다. */}
-          <div className="flex min-h-0 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-hairline bg-surface-soft/40 px-5 text-center">
-            <span className="text-[13px] font-semibold text-body-strong">AI 요약</span>
-            <span className="text-[12px] leading-relaxed text-muted-soft">
-              쌓인 이벤트를 읽어 오늘의 상황을 정리하고 물어볼 수 있는 자리입니다.
-              <br />
-              아직 붙이지 않았습니다.
-            </span>
-          </div>
+            * 숫자만 있는 KPI 옆에 '그래서 무엇이 찍혔나' 를 붙인다. 운영자가 이벤트 목록을
+            * 열어 한 건을 고르기 전에, 방금 무슨 일이 있었는지 한눈에 보게 하는 자리다.
+            *
+            * 맨 앞이 아니라 **스냅샷이 있는 것 중 맨 앞**을 고른다. 최신 이벤트에 사진이
+            * 없을 때 빈 칸을 보여 주면 '고장난 화면' 으로 보이기 때문이다. 대신 발생 시각을
+            * 함께 적어 언제 것인지 감추지 않는다.
+            *
+            * 박스는 그리지 않는다. 이 칸은 작아서 선이 겹치면 사진이 안 보인다 —
+            * 박스까지 보려면 눌러서 상세를 연다(아래 최근 이벤트 표와 같은 창). */}
+          {latestSnap ? (
+            <button
+              type="button"
+              onClick={() => setSelected(latestSnap)}
+              className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-surface-soft/40 text-left transition-colors hover:border-strong"
+            >
+              <div className="flex items-baseline justify-between gap-2 px-3 py-2">
+                <span className="text-[13px] font-semibold text-body-strong">최근 이벤트</span>
+                <span className="tnum shrink-0 text-[11.5px] text-muted-soft">
+                  {fmtAgo(latestSnap.ts)}
+                </span>
+              </div>
+              <div className="min-h-0 flex-1 bg-video-bg">
+                <img
+                  src={api.snapshotUrl(latestSnap.id)}
+                  alt={`${latestSnap.id} 캡쳐`}
+                  className="h-full w-full object-contain"
+                />
+              </div>
+              <div className="px-3 py-2">
+                <div className="truncate text-[12.5px] font-semibold text-body-strong">
+                  {latestSnap.type}
+                </div>
+                <div className="tnum truncate text-[11.5px] text-muted-soft">
+                  {latestSnap.cam_location} · {fmtShort(latestSnap.ts)}
+                </div>
+              </div>
+            </button>
+          ) : (
+            <div className="flex min-h-0 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-hairline bg-surface-soft/40 px-5 text-center">
+              <span className="text-[13px] font-semibold text-body-strong">최근 이벤트</span>
+              <span className="text-[12px] leading-relaxed text-muted-soft">
+                {events.length === 0
+                  ? "아직 이벤트가 없습니다."
+                  : "최근 이벤트에 저장된 사진이 없습니다."}
+              </span>
+            </div>
+          )}
           </div>
         </Section>
       </div>
