@@ -270,6 +270,12 @@ def test_settings_store() -> None:
         check(s.tuning["min_box_px"] == 0.0, "아래로 넘치면 최솟값으로 자른다")
         check(s.tuning["sample_fps"] == 2.5, "범위 안이면 그대로")
 
+        # 중단은 '아직 안 골랐다'와 달라야 한다. 같은 값으로 뭉개면 껐는데도 재시작할 때
+        # env 의 모델로 되살아난다.
+        s.stopped = True
+        check(s.active_model == "best.onnx",
+              "중단해도 고른 모델은 남는다 (다시 켤 때 또 고르게 하지 않는다)")
+
         # 저장 -> 다시 읽기
         settings.save(root, s)
         again = settings.load(root)
@@ -277,6 +283,7 @@ def test_settings_store() -> None:
         check(again.alias_map("best.onnx") == s.alias_map("best.onnx"), "표시 이름이 남는다")
         check(again.class_map("best.onnx") == s.class_map("best.onnx"), "항목 매핑이 남는다")
         check(again.tuning["sample_fps"] == 2.5, "조정값이 남는다")
+        check(again.stopped is True, "중단 상태가 남는다")
 
         # 깨진 파일에 기동이 막히면 안 된다 — 현장에서 손쓸 방법이 없어진다
         (root / settings.FILENAME).write_text("{이건 JSON 이 아니다", encoding="utf-8")

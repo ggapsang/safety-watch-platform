@@ -58,6 +58,9 @@ class Config(BaseConfig):
     # 모순된 감독이 되기 때문이다. 학습 신호는 보존하고 **여기서 걸러야** 한다.
     min_box_px: float = 0.0
     dry_run: bool = False
+    # 화면에서 추론을 꺼 둔 상태. dry_run 과 다르다 — dry_run 은 합성 박스를 발행하고,
+    # 이것은 아무것도 발행하지 않는다(settings.Settings.stopped 주석 참조).
+    stopped: bool = False
 
     # 모델 클래스 이름 -> 사람이 붙인 이름. 화면에 그려지는 것은 이 값이다.
     # class_map(항목 코드)과 층이 다르다 — 이름은 보여 주기용, 코드는 이벤트 승격용이라
@@ -119,6 +122,7 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
         if name in s.tuning:
             setattr(cfg, name, s.tuning[name])
 
+    cfg.stopped = s.stopped
     if s.active_model:
         candidate = Path(cfg.models_dir) / s.active_model
         if candidate.is_file():

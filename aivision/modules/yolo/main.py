@@ -98,6 +98,28 @@ class DryRunSource(_Base):
                 "label": label, "score": round(0.72 + 0.2 * random.random(), 3)}
 
 
+class StoppedSource(_Base):
+    """사람이 화면에서 꺼 둔 상태. 영상도 안 열고 아무것도 발행하지 않는다.
+
+    모듈을 통째로 내리지 않는 이유: 화면(11990)은 살아 있어야 다시 켤 수 있고,
+    플랫폼의 모듈 목록에서도 사라지면 '고장' 과 구별되지 않는다. 등록과 heartbeat 는
+    그대로 두고 추론만 멈춘다.
+
+    dry-run 과 헷갈리지 않도록 한다 — dry-run 은 합성 박스를 **발행하는** 점검 모드다.
+    """
+
+    @property
+    def device(self) -> str:
+        return "중단됨"
+
+    def boxes(self, item: WorkItem, stop: threading.Event) -> Iterator[list[dict]]:
+        # 켜질 때까지 조용히 기다린다. 다시 켜면 워커가 새로 떠서 여기를 벗어난다.
+        while not stop.wait(1.0):
+            pass
+        return
+        yield                                   # 제너레이터임을 알리는 도달 불가 구문
+
+
 class YoloSource(_Base):
     """RTSP 프레임을 솎아 추론한다. 모델은 워커 스레드마다 따로 연다."""
 
@@ -210,6 +232,23 @@ def _emit(worker, transitions) -> None:
 
 # ────────────────────────────────────────────────────────────── 기동
 
+def _pick_source(cfg):
+    """설정 상태 -> 워커가 쓸 소스. 세 상태를 한곳에서 가른다.
+
+    화면과 로그가 같은 말을 하도록 _mode() 와 짝을 맞춰 둔다 — 갈라 두면 '화면은 추론인데
+    실제로는 dry-run' 같은 어긋남이 생긴다.
+    """
+    if cfg.stopped:
+        return StoppedSource
+    return DryRunSource if cfg.dry_run else YoloSource
+
+
+def _mode(cfg) -> str:
+    if cfg.stopped:
+        return "중단됨"
+    return "dry-run" if cfg.dry_run else f"추론 · {cfg.model_path}"
+
+
 def main(argv: list[str]) -> int:
     configure_logging()
     cfg = config_module.load()
@@ -219,9 +258,8 @@ def main(argv: list[str]) -> int:
 
     # 리스트에 담는 이유: 화면에서 모델을 올리면 dry-run -> 추론으로 갈아타야 하는데,
     # 이름에 그냥 묶어 두면 Runner 가 들고 있는 람다가 옛 값을 계속 본다.
-    make_source = [DryRunSource if cfg.dry_run else YoloSource]
-    log.info("모듈 %s 기동 (%s)", cfg.module_id,
-             "dry-run" if cfg.dry_run else f"추론 · {cfg.model_path}")
+    make_source = [_pick_source(cfg)]
+    log.info("모듈 %s 기동 (%s)", cfg.module_id, _mode(cfg))
 
     runner = Runner(
         cfg,
@@ -253,10 +291,11 @@ def main(argv: list[str]) -> int:
         다음 폴링에서 되살리는데, 그때 make_source 가 갱신된 cfg 를 읽는다. 여기서
         따로 만들면 워커 생성 경로가 둘이 되고, 일감 목록과 어긋날 수 있다.
         """
-        make_source[0] = DryRunSource if cfg.dry_run else YoloSource
+        make_source[0] = _pick_source(cfg)
         for w in list(runner.workers.values()):
             w.stop()
-        log.info("설정이 바뀌어 워커를 다시 띄웁니다 (%d대)", len(runner.workers))
+        log.info("설정이 바뀌어 워커를 다시 띄웁니다 (%d대 · %s)",
+                 len(runner.workers), _mode(cfg))
 
     app = api.create_app(cfg, runner.status, reload_workers)
     log.info("모듈 화면: %s (컨테이너 안에서는 :%d)", cfg.public_url, cfg.serve_port)

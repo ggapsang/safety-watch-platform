@@ -51,7 +51,10 @@ async function refresh() {
 function renderNotice() {
   const m = state.module;
   const out = [];
-  if (m.mode === "dry-run") {
+  if (m.mode === "stopped") {
+    out.push(`<div class="warn"><b>사용 중단</b> — 추론을 멈춰 두었습니다. 박스도 이벤트도
+      나가지 않습니다. 오른쪽 '배치된 모델' 에서 <b>사용</b> 을 누르면 다시 시작합니다.</div>`);
+  } else if (m.mode === "dry-run") {
     out.push(`<div class="warn"><b>dry-run</b> — 모델이 없어 합성 박스를 발행하고 있습니다.
       위에서 ONNX 모델을 올리면 실제 추론으로 바뀝니다.</div>`);
   }
@@ -67,7 +70,7 @@ function renderInference() {
   const inf = state.inference || {};
   const m = state.module;
   $("infer-kv").innerHTML = [
-    ["모드", m.mode === "dry-run" ? "dry-run" : "추론"],
+    ["모드", { stopped: "사용 중단", "dry-run": "dry-run" }[m.mode] || "추론"],
     ["모델", m.model || "-"],
     ["장치", inf.device || "-"],
     ["입력 크기", m.imgsz],
@@ -143,25 +146,44 @@ async function saveTuning(key, value) {
 
 function renderModels() {
   const models = state.models || [];
+  const stopped = state.module.mode === "stopped";
+  const shown = currentModel();
+
   $("model-rows").innerHTML = models.length
-    ? models.map((m) => `<tr>
+    ? models.map((m) => {
+        // 세 상태를 구분해 보여 준다 — 돌고 있음 / 골라 뒀지만 멈춤 / 안 씀.
+        const badge = !m.active ? ""
+          : stopped ? ' <span class="pill unknown">사용 중단</span>'
+                    : ' <span class="pill on">사용 중</span>';
+        // 표가 지금 어느 모델을 보여 주는지 행에서도 알 수 있어야 한다. 모델이 하나뿐일
+        // 때 '클래스' 를 눌러도 화면이 안 바뀌어 '반응이 없다' 로 보였다.
+        const here = shown && shown.name === m.name;
+        return `<tr${here ? ' class="picked"' : ""}>
         <td>
-          <b>${esc(m.name)}</b>${m.active ? ' <span class="pill unknown">사용 중</span>' : ""}
+          <b>${esc(m.name)}</b>${badge}
           ${m.note ? `<div class="muted">${esc(m.note)}</div>` : ""}
         </td>
         <td class="num">${m.size_mb}MB</td>
         <td class="num">${m.classes.length || "-"}</td>
         <td style="white-space:nowrap">
-          ${m.active ? "" : `<button data-use="${esc(m.name)}">사용</button>`}
-          <button data-show="${esc(m.name)}">클래스</button>
-          ${m.active ? "" : `<button class="danger" data-del="${esc(m.name)}">삭제</button>`}
+          ${m.active && !stopped
+            ? `<button data-unuse="${esc(m.name)}">사용 중단</button>`
+            : `<button class="primary" data-use="${esc(m.name)}">사용</button>`}
+          <button data-show="${esc(m.name)}"${here ? " disabled" : ""}>클래스</button>
+          ${m.active && !stopped
+            ? "" : `<button class="danger" data-del="${esc(m.name)}">삭제</button>`}
         </td>
-      </tr>`).join("")
+      </tr>`;
+      }).join("")
     : `<tr><td colspan="4" class="muted">올린 모델이 없습니다.</td></tr>`;
 
   $("model-rows").querySelectorAll("[data-use]").forEach((b) => {
     b.onclick = () => act(`/api/models/${b.dataset.use}/use`, "POST",
-                          `${b.dataset.use} 을(를) 적용했습니다.`);
+                          `${b.dataset.use} 으로 추론을 시작합니다.`);
+  });
+  $("model-rows").querySelectorAll("[data-unuse]").forEach((b) => {
+    b.onclick = () => act(`/api/models/${b.dataset.unuse}/unuse`, "POST",
+                          "추론을 멈췄습니다. 모델은 그대로 있습니다.");
   });
   $("model-rows").querySelectorAll("[data-del]").forEach((b) => {
     b.onclick = () => {
@@ -170,7 +192,14 @@ function renderModels() {
     };
   });
   $("model-rows").querySelectorAll("[data-show]").forEach((b) => {
-    b.onclick = () => { editingModel = b.dataset.show; dirty = false; renderClasses(); };
+    b.onclick = () => {
+      editingModel = b.dataset.show;
+      dirty = false;
+      renderModels();                       // 고른 행 표시를 갱신한다
+      renderClasses();
+      // 표가 아래쪽에 있으면 눌러도 안 보인다. 눌렀다는 것이 눈에 보여야 한다.
+      $("class-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
   });
 }
 
@@ -219,6 +248,9 @@ function currentModel() {
 
 function renderClasses() {
   const model = currentModel();
+  // 어느 모델의 표인지 제목에 박아 둔다. 모델이 둘 이상이면 이것 없이는 무엇을 고치고
+  // 있는지 알 수 없고, 하나뿐일 때도 '클래스' 를 눌렀을 때 반응을 보여 준다.
+  $("class-of").textContent = model ? model.name : "";
   if (!model) {
     $("class-rows").innerHTML =
       `<tr><td colspan="3" class="muted">모델을 먼저 올리세요.</td></tr>`;

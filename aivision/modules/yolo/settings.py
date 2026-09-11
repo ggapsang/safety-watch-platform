@@ -65,6 +65,15 @@ class ClassRow:
 @dataclass
 class Settings:
     active_model: str = ""
+    # 사람이 화면에서 추론을 꺼 둔 상태.
+    #
+    # active_model 을 비우는 것으로 대신하지 않는다. 빈 값은 '아직 고르지 않았다'(그래서
+    # env 를 따른다)는 뜻이라 '일부러 껐다'와 구별되지 않는다. 둘을 합치면 껐는데 재시작할
+    # 때 env 의 모델로 되살아난다.
+    #
+    # 끈 상태는 dry-run 과도 다르다. dry-run 은 합성 박스를 **발행한다** — 배관을 보려고
+    # 만든 모드다. 끈 것은 아무것도 내보내지 않아야 한다.
+    stopped: bool = False
     tuning: dict[str, float] = field(default_factory=dict)
     # 모델 파일 이름 -> 클래스 표. 순서가 곧 클래스 인덱스라 리스트로 둔다.
     models: dict[str, list[ClassRow]] = field(default_factory=dict)
@@ -115,6 +124,7 @@ class Settings:
         return {
             "version": VERSION,
             "active_model": self.active_model,
+            "stopped": self.stopped,
             "tuning": self.tuning,
             "notes": self.notes,
             "models": {m: [r.to_dict() for r in rows] for m, rows in self.models.items()},
@@ -124,6 +134,7 @@ class Settings:
 def _parse(data: dict) -> Settings:
     s = Settings()
     s.active_model = str(data.get("active_model") or "")
+    s.stopped = bool(data.get("stopped"))
     raw_tuning = data.get("tuning") or {}
     for name, (lo, hi) in TUNING.items():
         if name in raw_tuning:

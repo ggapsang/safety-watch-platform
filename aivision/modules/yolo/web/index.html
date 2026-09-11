@@ -68,6 +68,13 @@
     font-size: 11px; font-weight: 600;
   }
   .pill.unknown { background: var(--surface-card); color: var(--muted); }
+  .pill.on { background: #dff0e2; color: #2f7a44; }
+  /* 표가 지금 보여 주는 모델의 행 */
+  tr.picked > td { background: var(--surface-soft); }
+  tr.picked > td:first-child { box-shadow: inset 3px 0 0 var(--primary); }
+  /* 카드 제목 옆의 '어느 모델인가' */
+  .of { font-weight: 600; font-size: 12px; color: var(--primary-active); }
+  .of:not(:empty)::before { content: "— "; color: var(--muted-soft); }
   .kv { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; margin-bottom: 12px; }
   .kv b { color: var(--body-strong); }
   .warn {
@@ -141,8 +148,8 @@
         <div class="msg" id="model-msg"></div>
       </div>
 
-      <div class="card">
-        <h2>탐지 대상</h2>
+      <div class="card" id="class-card">
+        <h2>탐지 대상 <span id="class-of" class="of"></span></h2>
         <p class="desc">
           왼쪽은 모델이 들고 온 이름입니다. 이름이 없는 모델이면 인덱스가 그대로 나옵니다.
           <b>표시 이름</b>은 대시보드 박스와 이벤트에 그려질 이름이고,

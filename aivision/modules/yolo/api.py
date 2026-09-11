@@ -114,7 +114,8 @@ def create_app(cfg, runner_status: Callable[[], dict],
         return JSONResponse({
             "module": {
                 "id": cfg.module_id, "name": cfg.module_name,
-                "mode": "dry-run" if cfg.dry_run else "inference",
+                "mode": ("stopped" if cfg.stopped
+                         else "dry-run" if cfg.dry_run else "inference"),
                 # 실제로 있는 파일만 이름을 보여 준다. MODEL_PATH 는 '있었으면 하는 곳'
                 # 이기도 해서, 없는 이름을 띄우면 올린 줄 알고 왜 dry-run 인지 묻게 된다.
                 "model": (cfg.model_path.name
@@ -203,12 +204,31 @@ def create_app(cfg, runner_status: Callable[[], dict],
 
     @app.post("/api/models/{name}/use")
     async def use_model(name: str) -> JSONResponse:
+        """이 모델로 추론을 시작한다. 꺼 둔 상태였다면 함께 켠다."""
         _model_file(name)
         s = _load()
         s.active_model = name
+        s.stopped = False
         _commit(s)
         log.info("적용 모델 변경: %s", name)
-        return JSONResponse({"active_model": name})
+        return JSONResponse({"active_model": name, "stopped": False})
+
+    @app.post("/api/models/{name}/unuse")
+    async def unuse_model(name: str) -> JSONResponse:
+        """추론을 멈춘다. 모델은 그대로 두고 쓰지 않을 뿐이다.
+
+        모델 선택(active_model)을 지우지 않는 이유: 다시 켤 때 무엇을 쓸지 사람이 또
+        고르게 하면 번거롭다. '무엇을 쓸지' 와 '지금 쓸지' 는 다른 결정이다.
+        """
+        _model_file(name)
+        s = _load()
+        if s.active_model and s.active_model != name:
+            raise HTTPException(status_code=409,
+                                detail=f"지금 쓰는 모델이 아닙니다 (사용 중: {s.active_model})")
+        s.stopped = True
+        _commit(s)
+        log.info("추론 중단: %s", name)
+        return JSONResponse({"active_model": s.active_model, "stopped": True})
 
     @app.post("/api/models/{name}/inspect")
     async def inspect_model(name: str) -> JSONResponse:
@@ -229,10 +249,14 @@ def create_app(cfg, runner_status: Callable[[], dict],
     async def delete_model(name: str) -> JSONResponse:
         path = _model_file(name)
         s = _load()
-        if s.active_model == name or (cfg.model_path and cfg.model_path.name == name):
+        # 중단해 둔 모델은 지울 수 있다. 돌고 있는 것만 막으면 된다 —
+        # 쓰지도 않는 모델을 지우려고 다른 모델을 먼저 적용하게 만들 이유가 없다.
+        in_use = (not s.stopped) and (s.active_model == name
+                                      or (cfg.model_path and cfg.model_path.name == name))
+        if in_use:
             raise HTTPException(status_code=409,
                                 detail="쓰고 있는 모델은 지울 수 없습니다. "
-                                       "다른 모델을 먼저 적용하세요.")
+                                       "먼저 '사용 중단' 하거나 다른 모델을 적용하세요.")
         path.unlink()
         s.models.pop(name, None)
         s.notes.pop(name, None)
