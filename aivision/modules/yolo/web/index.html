@@ -75,6 +75,31 @@
   /* 카드 제목 옆의 '어느 모델인가' */
   .of { font-weight: 600; font-size: 12px; color: var(--primary-active); }
   .of:not(:empty)::before { content: "— "; color: var(--muted-soft); }
+
+  /* 슬라이더 + 숫자 입력. 바로는 정밀 조정이 안 되고, 숫자만 두면 감이 안 온다 */
+  .tune { display: grid; gap: 9px; align-items: center; grid-template-columns: 1fr 84px; }
+  .tune input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
+  .tune input[type="range"] { padding: 0; background: none; border: none; }
+
+  /* 클래스 편집기 */
+  .modal-bg {
+    position: fixed; inset: 0; z-index: 50; display: flex;
+    align-items: center; justify-content: center; padding: 24px;
+    background: rgba(24, 23, 21, .45);
+  }
+  .modal {
+    display: flex; flex-direction: column; width: min(920px, 100%); max-height: 88vh;
+    background: #fff; border-radius: 14px; padding: 18px 20px 16px;
+    box-shadow: 0 18px 48px rgba(24, 23, 21, .22);
+  }
+  .modal-head { display: flex; align-items: center; gap: 10px; }
+  .modal-head h2 { flex: 1; margin: 0; }
+  .modal-head button { padding: 4px 9px; line-height: 1; }
+  .modal-body { min-height: 0; overflow: auto; }
+  .modal-foot { display: flex; align-items: center; gap: 9px; margin-top: 14px; }
+  .modal-foot .grow { flex: 1; }
+  .modal-foot .msg { margin: 0; }
+  [hidden] { display: none !important; }
   .kv { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; margin-bottom: 12px; }
   .kv b { color: var(--body-strong); }
   .warn {
@@ -151,21 +176,50 @@
       <div class="card" id="class-card">
         <h2>탐지 대상 <span id="class-of" class="of"></span></h2>
         <p class="desc">
-          왼쪽은 모델이 들고 온 이름입니다. 이름이 없는 모델이면 인덱스가 그대로 나옵니다.
-          <b>표시 이름</b>은 대시보드 박스와 이벤트에 그려질 이름이고,
-          <b>탐지 항목</b>은 이벤트로 쌓을 때 쓸 플랫폼 항목입니다.
-          항목을 비워 두면 박스만 그리고 이벤트는 만들지 않습니다.
+          모델이 잡는 것들입니다. <b>클래스 관리</b>에서 이름과 메모를 등록하세요.
         </p>
         <table>
           <thead>
-            <tr><th>모델 클래스</th><th>표시 이름</th><th>탐지 항목</th></tr>
+            <tr><th>모델 클래스</th><th>표시 이름</th><th>메모</th><th>탐지 항목</th></tr>
           </thead>
           <tbody id="class-rows"></tbody>
         </table>
-        <div style="margin-top:12px">
-          <button class="primary" id="save-classes">저장</button>
-          <span class="msg" id="class-msg"></span>
-        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 클래스 편집기.
+     모델마다 클래스가 다르고, 한 번 정하면 자주 고치지 않는다. 그런 것을 늘 펼쳐 두면
+     화면이 길어지기만 한다. 목록에서 '클래스' 를 눌러 그 모델의 것만 연다. -->
+  <div class="modal-bg" id="class-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2>클래스 관리 <span id="modal-of" class="of"></span></h2>
+        <button id="modal-close" aria-label="닫기">✕</button>
+      </div>
+      <p class="desc">
+        <b>모델 클래스</b>는 모델이 들고 온 이름입니다. 이름이 없는 모델이면 인덱스(0, 1, …)가
+        그대로 나오고, 바꿀 수 없습니다.<br />
+        <b>표시 이름</b>은 대시보드 박스와 이벤트에 그려집니다. 비우면 왼쪽 값을 씁니다.<br />
+        <b>메모</b>는 화면에 나오지 않습니다. 무엇을 잡으라고 만든 것인지, 어느 데이터로
+        학습했는지, 오탐이 잦은 조건은 무엇인지 — 몇 달 뒤의 자신을 위해 적어 두는 자리입니다.<br />
+        <b>탐지 항목</b>은 이벤트로 쌓을 때 쓸 플랫폼 항목입니다. 비우면 박스만 그리고
+        이벤트는 만들지 않습니다.
+      </p>
+      <div class="modal-body">
+        <table>
+          <thead>
+            <tr><th style="width:16%">모델 클래스</th><th style="width:22%">표시 이름</th>
+                <th>메모</th><th style="width:26%">탐지 항목</th></tr>
+          </thead>
+          <tbody id="modal-rows"></tbody>
+        </table>
+      </div>
+      <div class="modal-foot">
+        <span class="msg" id="class-msg"></span>
+        <div class="grow"></div>
+        <button id="modal-cancel">닫기</button>
+        <button class="primary" id="save-classes">저장</button>
       </div>
     </div>
   </div>

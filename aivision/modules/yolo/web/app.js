@@ -45,7 +45,9 @@ async function refresh() {
   renderInference();
   renderTuning();
   renderModels();
-  if (!dirty) renderClasses();
+  // 본문 표는 읽기 전용이라 언제 다시 그려도 된다. 편집 중인 모달은 건드리지 않는다 —
+  // 3초마다 입력칸이 초기화되면 이름을 적을 수가 없다.
+  renderClasses();
 }
 
 function renderNotice() {
@@ -105,29 +107,60 @@ const TUNING_META = {
 };
 
 function renderTuning() {
-  if (document.activeElement && document.activeElement.dataset.tuning) return;
+  // 손대고 있는 칸은 덮어쓰지 않는다. 3초마다 값이 되돌아가면 숫자를 칠 수가 없다.
+  const busy = document.activeElement && document.activeElement.dataset.tuning;
+  if (busy) return;
+
   const limits = state.limits || {};
   $("tuning").innerHTML = Object.entries(TUNING_META).map(([key, [label, desc, step]]) => {
     const lim = limits[key] || { min: 0, max: 1 };
     const value = state.tuning[key];
+    // 바와 숫자를 나란히 둔다. 바로는 0.55 와 0.56 을 가려 짚을 수 없고,
+    // 숫자만 두면 어느 쯤인지 감이 안 온다. 둘은 같은 값을 가리킨다.
     return `<label>
-      <span>${esc(label)} — <b data-out="${key}">${value}</b></span>
-      <input type="range" data-tuning="${key}" min="${lim.min}" max="${lim.max}"
-             step="${step}" value="${value}" />
-      <em>${esc(desc)}</em>
+      <span>${esc(label)}</span>
+      <div class="tune">
+        <input type="range" data-tuning="${key}" data-kind="range"
+               min="${lim.min}" max="${lim.max}" step="${step}" value="${value}" />
+        <input type="number" data-tuning="${key}" data-kind="number"
+               min="${lim.min}" max="${lim.max}" step="${step}" value="${value}" />
+      </div>
+      <em>${esc(desc)} (${lim.min} ~ ${lim.max})</em>
     </label>`;
   }).join("");
 
   $("tuning").querySelectorAll("[data-tuning]").forEach((input) => {
+    const key = input.dataset.tuning;
+    const pair = (kind) => $("tuning").querySelector(`[data-tuning="${key}"][data-kind="${kind}"]`);
+
+    // 한쪽을 움직이면 다른 쪽이 따라온다. 저장은 아직 하지 않는다.
     input.oninput = () => {
-      document.querySelector(`[data-out="${input.dataset.tuning}"]`).textContent = input.value;
+      const other = pair(input.dataset.kind === "range" ? "number" : "range");
+      if (other) other.value = input.value;
     };
-    // 저장은 손을 뗄 때 한 번만 한다. 드래그하는 내내 저장하면 워커가 계속 다시 뜬다.
-    input.onchange = () => saveTuning(input.dataset.tuning, input.value);
+
+    if (input.dataset.kind === "range") {
+      // 드래그하는 내내 저장하면 워커가 계속 다시 뜬다. 손을 뗄 때 한 번만 보낸다.
+      input.onchange = () => saveTuning(key, input.value);
+    } else {
+      // 숫자 칸은 다 치고 나서(포커스가 떠날 때나 Enter) 보낸다. 한 글자마다 보내면
+      // '0.5' 를 치는 도중의 '0' 이 저장된다.
+      input.onblur = () => saveTuning(key, input.value);
+      input.onkeydown = (e) => { if (e.key === "Enter") input.blur(); };
+      input.onchange = null;
+    }
   });
 }
 
 async function saveTuning(key, value) {
+  // 빈 칸이나 글자는 보내지 않는다. 서버가 400 을 돌려주는 것보다, 원래 값으로
+  // 되돌려 보여 주는 편이 '무엇이 적용돼 있는지' 를 헷갈리지 않게 한다.
+  if (value === "" || Number.isNaN(Number(value))) {
+    msg("tuning-msg", "숫자를 입력하세요.", "err");
+    renderTuning();
+    return;
+  }
+  if (Number(value) === state.tuning[key]) return;   // 안 바뀌었으면 워커를 흔들지 않는다
   msg("tuning-msg", "저장 중…");
   try {
     await api("/api/tuning", {
@@ -169,7 +202,7 @@ function renderModels() {
           ${m.active && !stopped
             ? `<button data-unuse="${esc(m.name)}">사용 중단</button>`
             : `<button class="primary" data-use="${esc(m.name)}">사용</button>`}
-          <button data-show="${esc(m.name)}"${here ? " disabled" : ""}>클래스</button>
+          <button data-show="${esc(m.name)}">클래스 관리</button>
           ${m.active && !stopped
             ? "" : `<button class="danger" data-del="${esc(m.name)}">삭제</button>`}
         </td>
@@ -192,14 +225,7 @@ function renderModels() {
     };
   });
   $("model-rows").querySelectorAll("[data-show]").forEach((b) => {
-    b.onclick = () => {
-      editingModel = b.dataset.show;
-      dirty = false;
-      renderModels();                       // 고른 행 표시를 갱신한다
-      renderClasses();
-      // 표가 아래쪽에 있으면 눌러도 안 보인다. 눌렀다는 것이 눈에 보여야 한다.
-      $("class-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
-    };
+    b.onclick = () => openClassEditor(b.dataset.show);
   });
 }
 
@@ -246,23 +272,45 @@ function currentModel() {
       || models.find((m) => m.active) || models[0] || null;
 }
 
+const solutionName = (code) => {
+  const hit = solutions.find((s) => s.code === code);
+  return hit ? `${hit.name} (${hit.code})` : code;
+};
+
+/** 본문의 읽기 전용 요약. 편집은 모달에서 한다 — 편집기를 두 벌 두면 언젠가 어긋난다. */
 function renderClasses() {
   const model = currentModel();
-  // 어느 모델의 표인지 제목에 박아 둔다. 모델이 둘 이상이면 이것 없이는 무엇을 고치고
-  // 있는지 알 수 없고, 하나뿐일 때도 '클래스' 를 눌렀을 때 반응을 보여 준다.
   $("class-of").textContent = model ? model.name : "";
   if (!model) {
     $("class-rows").innerHTML =
-      `<tr><td colspan="3" class="muted">모델을 먼저 올리세요.</td></tr>`;
+      `<tr><td colspan="4" class="muted">모델을 먼저 올리세요.</td></tr>`;
     return;
   }
   editingModel = model.name;
   if (!model.classes.length) {
     $("class-rows").innerHTML =
-      `<tr><td colspan="3" class="muted">이 모델에서 클래스를 읽지 못했습니다.</td></tr>`;
+      `<tr><td colspan="4" class="muted">이 모델에서 클래스를 읽지 못했습니다.</td></tr>`;
     return;
   }
+  $("class-rows").innerHTML = model.classes.map((c) => `<tr>
+      <td><code>${esc(c.key)}</code></td>
+      <td>${c.alias ? esc(c.alias) : `<span class="muted">${esc(c.key)}</span>`}</td>
+      <td class="muted">${c.memo ? esc(c.memo) : "-"}</td>
+      <td>${c.item
+        ? esc(solutionName(c.item))
+        : '<span class="muted">연결 안 함 — 박스만</span>'}</td>
+    </tr>`).join("");
+}
 
+/* ── 클래스 편집기(모달) ───────────────────────────────────────────── */
+
+function openClassEditor(name) {
+  editingModel = name;
+  dirty = false;
+  const model = currentModel();
+  if (!model) return;
+
+  $("modal-of").textContent = model.name;
   const options = (selected) => [`<option value="">(연결 안 함 — 박스만)</option>`]
     .concat(solutions.map((s) =>
       `<option value="${esc(s.code)}"${s.code === selected ? " selected" : ""}>
@@ -272,25 +320,49 @@ function renderClasses() {
       ? [`<option value="${esc(selected)}" selected>${esc(selected)}</option>`] : [])
     .join("");
 
-  $("class-rows").innerHTML = model.classes.map((c, i) => `<tr>
-      <td><code>${esc(c.key)}</code></td>
-      <td><input data-alias="${i}" value="${esc(c.alias)}"
-                 placeholder="${esc(c.key)}" /></td>
-      <td><select data-item="${i}">${options(c.item)}</select></td>
-    </tr>`).join("");
+  $("modal-rows").innerHTML = model.classes.length
+    ? model.classes.map((c, i) => `<tr>
+        <td><code>${esc(c.key)}</code></td>
+        <td><input data-alias="${i}" value="${esc(c.alias)}"
+                   placeholder="${esc(c.key)}" /></td>
+        <td><input data-memo="${i}" value="${esc(c.memo || "")}"
+                   placeholder="무엇을 잡는 클래스인지, 주의할 점은" /></td>
+        <td><select data-item="${i}">${options(c.item)}</select></td>
+      </tr>`).join("")
+    : `<tr><td colspan="4" class="muted">이 모델에서 클래스를 읽지 못했습니다.</td></tr>`;
 
-  $("class-rows").querySelectorAll("input,select").forEach((el) => {
+  $("modal-rows").querySelectorAll("input,select").forEach((el) => {
     el.oninput = () => { dirty = true; };
   });
+  msg("class-msg", "");
+  $("class-modal").hidden = false;
+  const first = $("modal-rows").querySelector("input");
+  if (first) first.focus();
 }
+
+function closeClassEditor() {
+  if (dirty && !confirm("저장하지 않은 내용이 있습니다. 닫을까요?")) return;
+  dirty = false;
+  $("class-modal").hidden = true;
+}
+
+$("modal-close").onclick = closeClassEditor;
+$("modal-cancel").onclick = closeClassEditor;
+// 바깥을 눌러도 닫힌다. 안쪽 클릭까지 닫히면 편집 중에 사라져 버린다.
+$("class-modal").onclick = (e) => { if (e.target === $("class-modal")) closeClassEditor(); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("class-modal").hidden) closeClassEditor();
+});
 
 $("save-classes").onclick = async () => {
   const model = currentModel();
   if (!model) return;
+  const val = (sel) => (document.querySelector(sel) || { value: "" }).value;
   const rows = model.classes.map((c, i) => ({
     key: c.key,
-    alias: document.querySelector(`[data-alias="${i}"]`).value,
-    item: document.querySelector(`[data-item="${i}"]`).value,
+    alias: val(`[data-alias="${i}"]`),
+    memo: val(`[data-memo="${i}"]`),
+    item: val(`[data-item="${i}"]`),
   }));
   msg("class-msg", "저장 중…");
   try {
@@ -302,6 +374,7 @@ $("save-classes").onclick = async () => {
     dirty = false;
     msg("class-msg", "저장했습니다. 추론 워커가 곧 새 설정으로 다시 뜹니다.", "ok");
     await refresh();
+    $("class-modal").hidden = true;
   } catch (e) {
     msg("class-msg", e.message, "err");
   }

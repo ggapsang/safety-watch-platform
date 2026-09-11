@@ -44,14 +44,19 @@ class ClassRow:
 
     `key`  모델이 들고 온 이름. 이름이 없는 모델이면 인덱스 문자열("0","1",…)이다.
     `alias` 사람이 붙인 이름. 화면(라이브 박스·이벤트 상세)에 이것이 그려진다.
-            이름을 못 읽은 모델에서는 '메모' 노릇을 하고, 읽은 모델에서는 '별칭' 이 된다.
             비우면 key 를 그대로 쓴다.
+    `memo`  그 클래스에 대한 사람의 메모. **화면에 그려지지 않는다.** 모델이 준 이름은
+            보통 학습할 때의 축약어(`amr`, `cls_2`)라 몇 달 뒤에 무엇이었는지 알 수 없다.
+            어느 데이터로 학습했는지, 무엇을 잡으라고 만든 것인지, 오탐이 잦은 조건은
+            무엇인지를 적어 두는 자리다. alias 에 그런 것을 적으면 박스 위에 문장이
+            그려진다 — 그래서 칸을 나눈다.
     `item`  플랫폼 탐지 항목 코드. 비우면 **이벤트를 만들지 않는다** — 박스만 그린다.
             보기만 하고 적재는 않는 클래스가 실제로 있다(사람·차량 같은 배경 객체).
     """
 
     key: str
     alias: str = ""
+    memo: str = ""
     item: str = ""
 
     @property
@@ -59,7 +64,7 @@ class ClassRow:
         return self.alias or self.key
 
     def to_dict(self) -> dict:
-        return {"key": self.key, "alias": self.alias, "item": self.item}
+        return {"key": self.key, "alias": self.alias, "memo": self.memo, "item": self.item}
 
 
 @dataclass
@@ -148,7 +153,7 @@ def _parse(data: dict) -> Settings:
             continue
         s.models[str(model)] = [
             ClassRow(key=str(r.get("key", "")), alias=str(r.get("alias", "") or ""),
-                     item=str(r.get("item", "") or ""))
+                     memo=str(r.get("memo", "") or ""), item=str(r.get("item", "") or ""))
             for r in rows if isinstance(r, dict) and r.get("key") is not None
         ]
     return s

@@ -257,6 +257,11 @@ def test_settings_store() -> None:
         check("no_vest" not in rows, "없어진 클래스는 표에서 빠진다")
         check(rows["forklift"].alias == "", "새 클래스는 빈 줄로 들어온다")
 
+        # 메모는 표시 이름과 다른 층이다. 여기 적은 것이 박스에 그려지면 안 된다.
+        rows["no_helmet"].memo = "2026-03 데이터로 학습. 역광에서 오탐"
+        check(s.alias_map("best.onnx")["no_helmet"] == "안전모 미착용",
+              "메모는 표시 이름을 밀어내지 않는다")
+
         # 두 층이 따로 논다 — 이름만 붙이고 이벤트는 안 만드는 클래스가 있어야 한다
         rows["forklift"].alias = "지게차"
         check(s.alias_map("best.onnx") == {"no_helmet": "안전모 미착용", "forklift": "지게차"},
@@ -284,6 +289,8 @@ def test_settings_store() -> None:
         check(again.class_map("best.onnx") == s.class_map("best.onnx"), "항목 매핑이 남는다")
         check(again.tuning["sample_fps"] == 2.5, "조정값이 남는다")
         check(again.stopped is True, "중단 상태가 남는다")
+        check({r.key: r.memo for r in again.rows("best.onnx")}["no_helmet"]
+              == "2026-03 데이터로 학습. 역광에서 오탐", "메모가 남는다")
 
         # 깨진 파일에 기동이 막히면 안 된다 — 현장에서 손쓸 방법이 없어진다
         (root / settings.FILENAME).write_text("{이건 JSON 이 아니다", encoding="utf-8")

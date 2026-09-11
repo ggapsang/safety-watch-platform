@@ -43,6 +43,7 @@ MAX_UPLOAD_MB = 512
 class ClassRowIn(BaseModel):
     key: str
     alias: str = ""
+    memo: str = ""
     item: str = ""
 
 
@@ -278,7 +279,7 @@ def create_app(cfg, runner_status: Callable[[], dict],
         s = _load()
         known = {r.key for r in s.rows(name)}
         rows = [settings_module.ClassRow(key=r.key, alias=r.alias.strip(),
-                                         item=r.item.strip())
+                                         memo=r.memo.strip()[:500], item=r.item.strip())
                 for r in body.rows if r.key in known]
         if len(rows) != len(body.rows):
             raise HTTPException(status_code=400,
