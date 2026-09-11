@@ -150,30 +150,33 @@ services:
       timeout: 5s
       retries: 5
 
-  # 서버 YOLO 모듈 — 학습과 추론, 그리고 자기 화면(11990).
+  # 객체감지 모듈 — 추론과 자기 화면(11990).
   #
-  # 코어가 아니라 별도 컨테이너인 이유: torch·onnxruntime·opencv 로 이미지가 GB 단위로
-  # 불어나고, 학습이나 추론이 죽을 때 웹서버가 같이 죽어서는 안 되며, 모델 로딩이 서버
-  # 기동을 붙잡아서도 안 된다. 그리고 이 모듈은 모듈 계약의 사용자여야 한다 —
-  # 코어 안에 두면 계약을 우회하는 특별 통로가 생긴다(매니페스토 1번).
+  # 코어가 아니라 별도 컨테이너인 이유: onnxruntime·opencv 로 이미지가 커지고, 추론이
+  # 죽을 때 웹서버가 같이 죽어서는 안 되며, 모델 로딩이 서버 기동을 붙잡아서도 안 된다.
+  # 그리고 이 모듈은 모듈 계약의 사용자여야 한다 — 코어 안에 두면 계약을 우회하는
+  # 특별 통로가 생긴다(매니페스토 1번).
   #
-  # 이 모듈만 화면을 갖는 이유: 사람이 할 일이 있다(데이터셋 선택·학습·모델 채택).
+  # 이 모듈만 화면을 갖는 이유: 사람이 할 일이 있다. 모델을 올리고, 그 모델이 무엇을
+  # 잡는지 확인해 이름을 붙이고, 플랫폼 탐지 항목에 연결하고, 민감도를 맞춘다.
   # 그 화면을 플랫폼에 넣으면 코어가 YOLO 를 알게 되므로(매니페스토 2번) 모듈이 직접
   # 띄우고, 플랫폼은 등록된 endpoint 를 탭으로 감싸기만 한다.
   #
-  # 기본으로 뜬다. 모델이 없으면 dry-run 으로 내려앉고 학습 화면(11990)만 쓴다 —
-  # 꺼 두면 클론한 쪽에서 '모듈이 없다' 로 보인다. 쓰지 않으려면 stop 하면 된다.
+  # 학습은 여기서 하지 않는다. 관제 서버는 24시간 떠 있어야 하는데 학습은 몇 시간짜리
+  # 배치 작업이고 GPU 와 수십 GB 데이터셋을 요구한다 — 학습 한 번이 추론을 굶긴다.
+  # 학습 코드는 refs/yolov7-training/ 에 남겼다. GPU 워크스테이션에서 돌린 뒤 ONNX 로
+  # 내보내 모듈 화면에서 올리면 된다.
   #
-  # GPU 로 학습하려면 CUDA 판 torch 로 빌드하고 아래 deploy 블록의 주석을 푼다.
-  #   docker compose build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 mod-yolo
+  # 기본으로 뜬다. 모델이 없으면 dry-run 으로 내려앉고 화면(11990)에서 모델을 올리면
+  # 추론으로 바뀐다 — 꺼 두면 클론한 쪽에서 '모듈이 없다' 로 보인다.
+  #
+  # GPU 로 추론하려면 requirements 의 onnxruntime 을 onnxruntime-gpu 로 바꾸고 아래
+  # deploy 블록의 주석을 푼다. provider 가 없으면 알아서 CPU 로 폴백한다.
   mod-yolo:
     build:
       # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
       context: ../modules
       dockerfile: yolo/Dockerfile
-      args:
-        # 기본은 CPU 판이라 어디서든 빌드된다. 학습에는 CUDA 판이 필요하다.
-        TORCH_INDEX: ${YOLO_TORCH_INDEX:-https://download.pytorch.org/whl/cpu}
     ports:
       # 모듈 자기 화면·API. 플랫폼 탭이 이 주소를 감싼다.
       - "${YOLO_UI_PORT:-11990}:8000"
@@ -193,9 +196,11 @@ services:
       MQTT_PORT: "1883"
       MODULE_ID: ${YOLO_MODULE_ID:-yolo-server}
       MODULE_NAME: ${YOLO_MODULE_NAME:-객체감지}
-      # 모델 파일 경로(컨테이너 안). 없으면 모듈이 dry-run 으로 내려앉는다.
+      # 처음 쓸 모델 경로(컨테이너 안). 없으면 dry-run 으로 내려앉고, 화면에서 모델을
+      # 올리면 그것이 기록되어(module.json) 다음부터는 이 값보다 우선한다.
       MODEL_PATH: ${YOLO_MODEL_PATH:-/models/best.onnx}
-      # 모델 클래스 -> 플랫폼 탐지 항목 코드. 모델이 바뀌면 이것만 바꾼다.
+      # 모델 클래스 -> 플랫폼 탐지 항목 코드. **이제 모듈 화면에서 정한다** —
+      # 여기는 화면에 한 번도 들어가지 않은 현장을 위한 초기값일 뿐이다.
       # 예: {"no_helmet":"ITEM-001","no_vest":"ITEM-002"}  (항목을 먼저 만들어 두세요)
       # (compose 는 기본값 안의 중괄호를 제대로 못 읽으므로 기본값은 비워 둔다.)
       CLASS_MAP: ${YOLO_CLASS_MAP:-}
@@ -215,15 +220,12 @@ services:
       # 브라우저가 닿는 주소. 플랫폼이 이 주소를 탭으로 감싼다.
       # 다른 PC 에서 접속시킬 거라면 localhost 대신 서버 PC 의 IP 를 넣어야 한다.
       PUBLIC_URL: ${YOLO_PUBLIC_URL:-http://localhost:11990}
-      # 학습에 쓸 장치. GPU 번호 또는 cpu. CPU 로는 현실적으로 학습이 안 된다.
-      TRAIN_DEVICE: ${YOLO_TRAIN_DEVICE:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      # 모델과 사전학습 가중치. 학습 결과를 여기에 쓰므로 읽기 전용이 아니다.
+      # 모델 파일과 이 모듈의 설정(module.json). 화면에서 모델을 올리고 설정을 고치므로
+      # 읽기 전용이 아니다. 호스트 폴더라 파일을 직접 넣고 빼기도 쉽다.
       - ../models:/models
-      # 학습 산출물과 데이터셋. 수십 GB 가 될 수 있어 볼륨으로 둔다.
-      - training:/training
-    # GPU 학습을 쓸 때 주석을 푼다. Docker Desktop 은 WSL2 GPU 지원이 켜져 있어야 한다.
+    # GPU 추론을 쓸 때 주석을 푼다. Docker Desktop 은 WSL2 GPU 지원이 켜져 있어야 한다.
     # deploy:
     #   resources:
     #     reservations:
@@ -272,8 +274,7 @@ services:
 # 새 빈 볼륨이 생기고 기존 DB·녹화가 통째로 사라진다. 이름이 옛 서비스명을 닮은 것은
 # 그 대가에 비하면 사소하다.
 volumes:
-  db-data:
-  training:        # 학습 산출물·데이터셋 (mod-yolo). 수십 GB 가 될 수 있다         # PostgreSQL 데이터 (base-db)
+  db-data:         # PostgreSQL 데이터 (base-db)
   recordings:      # 미디어 서버의 상시 녹화 세그먼트 — 회전 삭제됨 (base-media)
   media-data:      # 플랫폼 자산 — 스냅샷과 이벤트 클립, 오래 보관 (base-app)
   mqtt-data:       # 브로커 영속 세션 (base-broker)

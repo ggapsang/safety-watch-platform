@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>객체감지 — 학습과 추론</title>
+<title>객체감지 — 모델과 탐지 설정</title>
 <!--
   모듈 화면. 빌드 도구를 쓰지 않고 정적 파일 두 개로 끝낸다.
 
-  왜 React 를 쓰지 않는가: 이 화면은 폼 하나, 표 둘, 로그 창 하나다. 여기에 번들러를
+  왜 React 를 쓰지 않는가: 이 화면은 업로드 버튼 하나, 표 둘, 슬라이더 다섯이다. 여기에 번들러를
   붙이면 모듈 이미지에 node 를 넣거나 빌드 단계를 하나 더 두어야 하는데, 그 비용이
   얻는 것보다 크다. 플랫폼 화면(web/)은 React 를 쓰는 것이 맞고, 여기는 아니다.
 
@@ -67,17 +67,7 @@
     display: inline-block; padding: 1px 8px; border-radius: 99px;
     font-size: 11px; font-weight: 600;
   }
-  .pill.running { background: var(--primary-soft); color: var(--primary-active); }
-  .pill.done { background: #dff0e2; color: #2f7a44; }
-  .pill.failed, .pill.canceled { background: #f6dede; color: #9b3232; }
   .pill.unknown { background: var(--surface-card); color: var(--muted); }
-  pre {
-    margin: 0; padding: 11px 12px; height: 320px; overflow: auto;
-    background: var(--dark); color: #d8d3ca; border-radius: 9px;
-    font: 11.5px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap;
-  }
-  .bar { height: 6px; background: var(--surface-card); border-radius: 99px; overflow: hidden; }
-  .bar > i { display: block; height: 100%; background: var(--primary); transition: width .4s; }
   .kv { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; margin-bottom: 12px; }
   .kv b { color: var(--body-strong); }
   .warn {
@@ -91,10 +81,11 @@
 </style>
 </head>
 <body>
-  <h1>객체감지 — 학습과 추론</h1>
+  <h1>객체감지 — 모델과 탐지 설정</h1>
   <p class="sub">
     이 화면은 모듈이 직접 띄웁니다. 플랫폼 코어는 여기에 무엇이 있는지 모릅니다 —
     등록된 모듈의 주소를 탭으로 감싸 보여 주기만 합니다.
+    학습은 여기서 하지 않습니다. 학습한 모델을 <b>ONNX 로 내보내</b> 올리세요.
   </p>
 
   <div id="notice"></div>
@@ -102,81 +93,76 @@
   <div class="grid">
     <div>
       <div class="card">
-        <h2>학습 시작</h2>
+        <h2>모델 올리기</h2>
         <p class="desc">
-          데이터셋 준비(라벨링·프레임 추출)는 이 모듈의 일이 아닙니다. 준비된 데이터셋
-          yaml 을 골라 주세요.
+          ONNX 파일만 받습니다. 올리면 바로 열어 보고, 클래스 이름이 들어 있으면 읽어
+          아래 표를 채웁니다. 없으면 인덱스(0, 1, …)로 만들어 두니 이름은 직접 붙이세요.
         </p>
-        <form id="train-form">
-          <label><span>학습 이름</span>
-            <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
-                   placeholder="trash-v4" />
-            <em>산출물 폴더 이름이 됩니다. 영문·숫자·. _ - 만 씁니다.</em>
-          </label>
-          <label><span>데이터셋</span>
-            <select name="data" id="data-select" required></select>
-            <em id="data-hint">볼륨에서 찾은 데이터셋 yaml 입니다.</em>
-          </label>
-          <label><span>사전학습 가중치</span>
-            <select name="weights" id="weights-select"></select>
-            <em>전이학습 출발점. 처음부터 학습하면 이 규모의 데이터로는 성능이 나오지 않습니다.</em>
-          </label>
-          <div class="row">
-            <label><span>epoch</span><input name="epochs" type="number" value="60" min="1" max="1000" /></label>
-            <label><span>batch</span><input name="batch" type="number" value="16" min="1" max="128" /></label>
-          </div>
-          <div class="row">
-            <label><span>이미지 크기</span><input name="imgsz" type="number" value="640" min="320" max="1920" step="32" /></label>
-            <label><span>장치</span>
-              <input name="device" id="device-input" placeholder="0" />
-              <em>GPU 번호 또는 cpu</em>
-            </label>
-          </div>
-          <button class="primary" id="start-btn" type="submit">학습 시작</button>
-          <button class="danger" id="cancel-btn" type="button">취소</button>
-          <div class="msg" id="train-msg"></div>
-        </form>
+        <label>
+          <span>ONNX 파일</span>
+          <input type="file" id="file-input" accept=".onnx" />
+          <em>상한 512MB. 파일 이름이 곧 모델 이름이 됩니다.</em>
+        </label>
+        <button class="primary" id="upload-btn">올리기</button>
+        <div class="msg" id="upload-msg"></div>
       </div>
 
       <div class="card">
         <h2>추론 상태</h2>
-        <p class="desc">추론은 학습과 무관하게 계속 돕니다. 판정은 MQTT 로 나갑니다.</p>
+        <p class="desc">플랫폼에서 이 모듈에 할당한 카메라를 처리하고 있는지 봅니다.</p>
         <div class="kv" id="infer-kv"></div>
-        <table><tbody id="infer-rows"></tbody></table>
+        <table>
+          <thead><tr><th>카메라</th><th>상태</th></tr></thead>
+          <tbody id="infer-rows"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>탐지 민감도</h2>
+        <p class="desc">
+          바꾸면 곧바로 저장되고 추론 워커가 새 값으로 다시 뜹니다(수십 초).
+          컨테이너를 다시 띄울 필요는 없습니다.
+        </p>
+        <div id="tuning"></div>
+        <div class="msg" id="tuning-msg"></div>
       </div>
     </div>
 
     <div>
       <div class="card">
-        <h2>진행 중인 학습</h2>
-        <div id="progress"></div>
-        <pre id="log">로그가 없습니다.</pre>
-      </div>
-
-      <div class="card">
-        <h2>학습 결과</h2>
+        <h2>배치된 모델</h2>
         <p class="desc">
-          쓸 모델을 고르면 ONNX 로 내보내 추론이 보는 자리에 복사합니다.
-          그 뒤 모듈을 다시 시작하면 새 모델로 돕니다.
+          쓸 모델을 고릅니다. 바꾸면 추론 워커가 새 모델로 다시 뜹니다.
         </p>
         <table>
-          <thead><tr><th>이름</th><th>상태</th><th>epoch</th><th>가중치</th><th></th></tr></thead>
-          <tbody id="run-rows"></tbody>
+          <thead><tr><th>모델</th><th>크기</th><th>클래스</th><th></th></tr></thead>
+          <tbody id="model-rows"></tbody>
         </table>
-        <div class="msg" id="run-msg"></div>
+        <div class="msg" id="model-msg"></div>
       </div>
 
       <div class="card">
-        <h2>배치된 모델</h2>
-        <p class="desc">추론이 쓰는 폴더입니다. 여기 있는 것을 <code>MODEL_PATH</code> 로 가리킵니다.</p>
+        <h2>탐지 대상</h2>
+        <p class="desc">
+          왼쪽은 모델이 들고 온 이름입니다. 이름이 없는 모델이면 인덱스가 그대로 나옵니다.
+          <b>표시 이름</b>은 대시보드 박스와 이벤트에 그려질 이름이고,
+          <b>탐지 항목</b>은 이벤트로 쌓을 때 쓸 플랫폼 항목입니다.
+          항목을 비워 두면 박스만 그리고 이벤트는 만들지 않습니다.
+        </p>
         <table>
-          <thead><tr><th>파일</th><th>크기</th><th>만든 시각</th></tr></thead>
-          <tbody id="model-rows"></tbody>
+          <thead>
+            <tr><th>모델 클래스</th><th>표시 이름</th><th>탐지 항목</th></tr>
+          </thead>
+          <tbody id="class-rows"></tbody>
         </table>
+        <div style="margin-top:12px">
+          <button class="primary" id="save-classes">저장</button>
+          <span class="msg" id="class-msg"></span>
+        </div>
       </div>
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

@@ -1,16 +1,16 @@
-# 서버 YOLO 모듈 — 학습과 추론.
+# 객체감지 모듈 — 추론 전용.
 #
-# 서버 이미지와 분리하는 이유. torch 와 onnxruntime·opencv 만으로 이미지가 GB 단위로
-# 불어나고, 추론이나 학습이 죽을 때 웹서버가 같이 죽어서는 안 되며, 모델 로딩이 서버
-# 기동을 붙잡아서도 안 된다. 그리고 이 모듈은 모듈 계약의 사용자여야 한다 — 코어 안에
-# 두면 계약을 우회하는 특별 통로가 생긴다(매니페스토 1번).
+# 서버 이미지와 분리하는 이유. 모델 로딩이 웹서버 기동을 붙잡아서는 안 되고, 추론이
+# 죽을 때 웹서버가 같이 죽어서도 안 된다. 그리고 이 모듈은 모듈 계약의 사용자여야
+# 한다 — 코어 안에 두면 계약을 우회하는 특별 통로가 생긴다(매니페스토 1번).
 #
-# GPU 로 학습할 때:
-#   docker compose build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 mod-yolo
-#   그리고 compose 에서 GPU 를 넘긴다(주석 참조). CPU 판으로도 추론은 되지만 학습은
-#   현실적으로 불가능하다 — 이 데이터 규모에서 GPU 2시간이 CPU 며칠이 된다.
-ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
-
+# **학습은 여기 없다.** 예전에는 torch 와 yolov7 을 담아 학습까지 돌렸고 이미지가
+# 3GB 를 넘었다. 관제 서버는 24시간 떠 있어야 하는데 학습은 몇 시간짜리 배치 작업이라
+# 같이 둘 일이 아니었다. 학습 코드는 refs/yolov7-training/ 에 참조용으로 남겼다.
+# 학습은 GPU 워크스테이션에서 돌리고, ONNX 로 내보내 모듈 화면(11990)에서 올린다.
+#
+# 그래서 런타임은 onnxruntime 하나다. GPU 로 추론하려면 onnxruntime-gpu 로 바꾸고
+# compose 에서 장치를 넘긴다(CUDAExecutionProvider 가 없으면 CPU 로 폴백한다).
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -18,27 +18,21 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Asia/Seoul
 
 # opencv-python-headless 도 libGL 없이는 못 돌고, ffmpeg 는 RTSP 를 읽는 데 필요하다.
-# git 은 vendor/yolov7 이 버전 정보를 캐낼 때 부른다(없어도 되지만 경고가 시끄럽다).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         ffmpeg \
-        git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-ARG TORCH_INDEX
-RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} torch torchvision
 
 COPY yolo/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 빌드 컨텍스트는 modules/ 다. 모듈들이 공유하는 SDK 를 같이 담는다.
 COPY _sdk/ /app/_sdk/
-COPY yolo/vendor/ /app/vendor/
 COPY yolo/web/ /app/web/
 COPY yolo/*.py /app/
 
-# 모델·데이터셋·학습 산출물은 이미지에 굽지 않는다. 전부 볼륨이다.
+# 모델과 이 모듈의 설정(module.json)은 이미지에 굽지 않는다. 볼륨이다.
 EXPOSE 8000
 CMD ["python", "main.py"]

@@ -222,90 +222,95 @@ def test_platform_contract() -> None:
           "라이브 토픽의 카메라 조각")
 
 
-# ────────────────────────────────────────────────── 5. 학습 배관
 
-def test_training_plumbing() -> None:
-    """학습을 실제로 돌리지 않고 확인할 수 있는 것들.
+# ────────────────────────────────────────────────── 5. 모듈 설정
 
-    GPU 도 데이터셋도 없는 곳에서 도는 검증이라, '무엇을 거부하는가' 를 본다.
-    잘못된 입력을 조용히 받아 몇 시간 뒤에 실패하는 것이 가장 나쁘다.
+def test_settings_store() -> None:
+    """화면에서 고친 값이 파일로 오가는 길.
+
+    학습 배관 검증이 있던 자리다. 학습은 이 모듈의 일이 아니게 되어(refs/yolov7-training)
+    걷어냈고, 대신 그 자리에 들어온 것이 이 설정 저장소다.
     """
-    print("학습 배관")
+    print("모듈 설정")
     import tempfile
 
-    import training
+    import settings
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        trainer = training.Trainer(root / "runs")
-        check(trainer.status()["busy"] is False, "처음에는 놀고 있다")
-        check(trainer.runs() == [], "학습 기록이 없다")
+        check(settings.load(root).active_model == "", "파일이 없으면 빈 설정")
 
-        try:
-            trainer.start(name="x", data=str(root / "none.yaml"), weights="",
-                          hyp="h", cfg="c", epochs=1, batch=1, imgsz=640, device="cpu")
-        except FileNotFoundError:
-            check(True, "없는 데이터셋은 시작 전에 거부한다")
-        else:
-            check(False, "없는 데이터셋은 시작 전에 거부한다")
+        s = settings.Settings()
+        s.active_model = "best.onnx"
 
-        # 데이터셋 탐색: 학습용 yaml 과 하이퍼파라미터 yaml 을 가려낸다
-        ds = root / "datasets"
-        ds.mkdir()
-        nl = chr(10)
-        (ds / "trash.yaml").write_text(
-            nl.join(["train: ./images/train", "val: ./images/val",
-                     "nc: 1", "names: ['trash']", ""]), encoding="utf-8")
-        (ds / "hyp.yaml").write_text(
-            nl.join(["lr0: 0.01", "momentum: 0.937", ""]), encoding="utf-8")
-        found = training.find_datasets([ds])
-        check(len(found) == 1 and found[0]["name"] == "trash.yaml",
-              f"데이터셋 yaml 만 골라낸다 ({[f['name'] for f in found]})")
-        check(found[0]["nc"] == 1, "클래스 수를 읽는다")
+        # 모델이 들고 온 클래스로 표를 세운다
+        check(s.ensure_rows("best.onnx", ["no_helmet", "no_vest"]), "표를 새로 만들면 바뀐다")
+        check(not s.ensure_rows("best.onnx", ["no_helmet", "no_vest"]),
+              "같은 클래스면 바뀌지 않는다")
 
-        # 모델 목록
-        models = root / "models"
-        models.mkdir()
-        (models / "a.onnx").write_bytes(b"x" * 2048)
-        (models / "notes.txt").write_text("무시", encoding="utf-8")
-        listed = training.list_models(models)
-        check(len(listed) == 1 and listed[0]["name"] == "a.onnx", "onnx 만 모델로 센다")
+        # 사람이 적은 것은 모델을 다시 열어도 살아남아야 한다
+        s.models["best.onnx"][0].alias = "안전모 미착용"
+        s.models["best.onnx"][0].item = "ITEM-001"
+        s.ensure_rows("best.onnx", ["no_helmet", "forklift"])
+        rows = {r.key: r for r in s.rows("best.onnx")}
+        check(rows["no_helmet"].alias == "안전모 미착용", "적어 둔 이름은 살아남는다")
+        check("no_vest" not in rows, "없어진 클래스는 표에서 빠진다")
+        check(rows["forklift"].alias == "", "새 클래스는 빈 줄로 들어온다")
 
-        try:
-            training.export_onnx(root / "없는가중치.pt")
-        except FileNotFoundError:
-            check(True, "없는 가중치는 내보내기 전에 거부한다")
-        else:
-            check(False, "없는 가중치는 내보내기 전에 거부한다")
+        # 두 층이 따로 논다 — 이름만 붙이고 이벤트는 안 만드는 클래스가 있어야 한다
+        rows["forklift"].alias = "지게차"
+        check(s.alias_map("best.onnx") == {"no_helmet": "안전모 미착용", "forklift": "지게차"},
+              "표시 이름 표")
+        check(s.class_map("best.onnx") == {"no_helmet": "ITEM-001"},
+              "항목 코드는 연결된 것만 (박스만 그리는 클래스는 빠진다)")
 
-        # 배치는 복사다 — 학습 폴더를 지워도 추론이 죽지 않아야 한다
-        src = root / "run" / "weights"
-        src.mkdir(parents=True)
-        onnx = src / "best.onnx"
-        onnx.write_bytes(b"y" * 1024)
-        dest = training.publish(onnx, models, "picked.onnx")
-        import shutil as _sh
+        # 조정값은 범위 밖이어도 거절하지 않고 자른다
+        s.set_tuning({"conf_thres": 5.0, "min_box_px": -3, "sample_fps": 2.5})
+        check(s.tuning["conf_thres"] == 0.99, "위로 넘치면 최댓값으로 자른다")
+        check(s.tuning["min_box_px"] == 0.0, "아래로 넘치면 최솟값으로 자른다")
+        check(s.tuning["sample_fps"] == 2.5, "범위 안이면 그대로")
 
-        _sh.rmtree(root / "run")
-        check(dest.is_file() and dest.read_bytes() == b"y" * 1024,
-              "배치한 모델은 학습 폴더를 지워도 남는다")
+        # 저장 -> 다시 읽기
+        settings.save(root, s)
+        again = settings.load(root)
+        check(again.active_model == "best.onnx", "적용 모델이 남는다")
+        check(again.alias_map("best.onnx") == s.alias_map("best.onnx"), "표시 이름이 남는다")
+        check(again.class_map("best.onnx") == s.class_map("best.onnx"), "항목 매핑이 남는다")
+        check(again.tuning["sample_fps"] == 2.5, "조정값이 남는다")
+
+        # 깨진 파일에 기동이 막히면 안 된다 — 현장에서 손쓸 방법이 없어진다
+        (root / settings.FILENAME).write_text("{이건 JSON 이 아니다", encoding="utf-8")
+        check(settings.load(root).active_model == "", "깨진 설정은 빈 설정으로 내려앉는다")
 
 
-def test_vendor_present() -> None:
-    """vendor/yolov7 이 실제로 들어 있는지. 없으면 학습이 시작조차 안 된다."""
-    print("vendor 확인")
-    import training
+def test_training_is_gone() -> None:
+    """학습이 정말로 빠졌는지. 의존성이 남으면 이미지가 다시 GB 로 돌아간다."""
+    print("학습 제거 확인")
+    here = Path(__file__).resolve().parent
 
-    for name in ("train.py", "test.py", "export.py", "_compat.py"):
-        check((training.VENDOR / name).is_file(), f"vendor/yolov7/{name}")
-    check((training.VENDOR / "cfg" / "training" / "yolov7.yaml").is_file(),
-          "모델 구조 yaml")
-    check((training.VENDOR / "data" / "hyp.iseco2.yaml").is_file(), "하이퍼파라미터 yaml")
+    check(not (here / "training.py").exists(), "training.py 가 없다")
+    check(not (here / "vendor").exists(), "vendor/ 가 없다")
+
+    reqs = (here / "requirements.txt").read_text(encoding="utf-8")
+    for banned in ("torch", "scipy", "pandas", "matplotlib", "seaborn", "tensorboard"):
+        check(not any(line.strip().startswith(banned)
+                      for line in reqs.splitlines()),
+              f"requirements 에 {banned} 가 없다")
+
+    # ONNX 외의 형식은 분명히 거절해야 한다. 조용히 받으면 워커가 뜰 때마다 죽는다.
+    import inference
+
+    try:
+        inference._load_backend(Path("model.torchscript"), "cpu")
+    except ValueError:
+        check(True, ".torchscript 는 거절한다")
+    else:
+        check(False, ".torchscript 는 거절한다")
 
 
 def main() -> int:
     for fn in (test_output_shapes, test_scale_back, test_debounce, test_platform_contract,
-               test_training_plumbing, test_vendor_present):
+               test_settings_store, test_training_is_gone):
         fn()
     print(f"\n검증 {CHECKS}개 통과 ({time.strftime('%H:%M:%S')})")
     return 0

@@ -1,241 +1,297 @@
-/* 모듈 화면 로직. 의존성 없음.
+/* 모듈 화면의 동작.
  *
- * 상태는 /api/state 한 곳에서만 받는다. 조각조각 부르면 화면 일부는 새 값, 일부는 헌 값이
- * 되어 "학습이 끝났는데 목록에는 아직 돌고 있음" 같은 어긋남이 생긴다.
+ * 상태는 /api/state 하나로만 받는다. 조각조각 부르면 화면의 일부만 새것이 되어
+ * '모델은 바뀌었는데 클래스 표는 옛것' 같은 어긋남이 생긴다.
  *
- * 폴링 주기를 학습 중일 때만 빠르게 한다. 학습은 몇 시간을 돌지만 그 사이 화면을 계속
- * 켜 두는 사람이 있고, 반대로 아무 일도 없을 때 2초마다 두드릴 이유는 없다.
+ * 폴링은 3초다. 이 화면에서 빨리 바뀌는 것은 추론 상태(프레임 수)뿐이라 더 자주 볼
+ * 이유가 없다. 대신 사람이 무언가를 누른 직후에는 곧바로 한 번 더 받는다.
+ *
+ * 편집 중인 표는 덮어쓰지 않는다. 3초마다 입력칸이 초기화되면 이름을 적을 수 없다.
  */
-const IDLE_MS = 5000;
-const BUSY_MS = 2000;
-
-let timer = null;
-let lastLogLen = 0;
 
 const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"]/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+let state = null;
+let solutions = [];
+let editingModel = "";     // 클래스 표를 보여 주고 있는 모델
+let dirty = false;         // 표를 손대는 중이면 폴링이 덮어쓰지 않는다
+
+function msg(el, text, kind) {
+  const node = $(el);
+  node.textContent = text || "";
+  node.className = "msg" + (kind ? " " + kind : "");
 }
 
 async function api(path, options) {
   const res = await fetch(path, options);
-  const text = await res.text();
   let body = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = { detail: text }; }
-  if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+  try { body = await res.json(); } catch { /* 본문 없는 응답 */ }
+  if (!res.ok) throw new Error((body && body.detail) || `HTTP ${res.status}`);
   return body;
 }
 
-function say(el, text, ok) {
-  el.textContent = text;
-  el.className = "msg " + (ok ? "ok" : "err");
-  if (ok) window.setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, 6000);
-}
+/* ── 상태 ──────────────────────────────────────────────────────────── */
 
-/* ── 그리기 ─────────────────────────────────────────────────────── */
-
-function renderNotice(state) {
-  const bits = [];
-  if (state.module.mode === "dry-run") {
-    bits.push("지금은 <b>dry-run</b> 입니다 — 모델 파일이 없어 합성 박스를 발행합니다. " +
-              "아래에서 학습을 돌리거나, 이미 있는 <code>.onnx</code> 를 모델 폴더에 두고 모듈을 다시 시작하세요.");
+async function refresh() {
+  try {
+    state = await api("/api/state");
+  } catch (e) {
+    $("notice").innerHTML = `<div class="warn">모듈에 연결하지 못했습니다: ${esc(e.message)}</div>`;
+    return;
   }
-  if (!state.pretrained.length) {
-    bits.push("사전학습 가중치(<code>yolov7_training.pt</code>)가 모델 폴더에 없습니다. " +
-              "공식 YOLOv7 릴리스에서 받아 두어야 전이학습을 시작할 수 있습니다.");
+  renderNotice();
+  renderInference();
+  renderTuning();
+  renderModels();
+  if (!dirty) renderClasses();
+}
+
+function renderNotice() {
+  const m = state.module;
+  const out = [];
+  if (m.mode === "dry-run") {
+    out.push(`<div class="warn"><b>dry-run</b> — 모델이 없어 합성 박스를 발행하고 있습니다.
+      위에서 ONNX 모델을 올리면 실제 추론으로 바뀝니다.</div>`);
   }
-  if (!state.datasets.length) {
-    bits.push("데이터셋 yaml 을 찾지 못했습니다. 학습 데이터를 볼륨에 넣고 " +
-              "<code>train:</code> · <code>nc:</code> 가 있는 yaml 을 함께 두세요.");
+  const active = (state.models || []).find((x) => x.active);
+  if (active && active.classes.length && !active.classes.some((c) => c.item)) {
+    out.push(`<div class="warn">탐지 항목에 연결된 클래스가 없습니다 —
+      박스는 그리지만 <b>이벤트는 쌓이지 않습니다</b>. 오른쪽 '탐지 대상' 에서 연결하세요.</div>`);
   }
-  $("notice").innerHTML = bits.length
-    ? `<div class="warn">${bits.join("<br>")}</div>` : "";
+  $("notice").innerHTML = out.join("");
 }
 
-function renderForm(state) {
-  const ds = $("data-select");
-  if (ds.dataset.count !== String(state.datasets.length)) {
-    ds.dataset.count = String(state.datasets.length);
-    ds.innerHTML = state.datasets.length
-      ? state.datasets.map((d) =>
-          `<option value="${esc(d.path)}">${esc(d.name)}${d.nc != null ? ` — ${d.nc}클래스` : ""}</option>`).join("")
-      : `<option value="">(없음)</option>`;
-  }
-  const chosen = state.datasets.find((d) => d.path === ds.value);
-  $("data-hint").textContent = chosen
-    ? `${chosen.path}${chosen.names ? "  ·  " + chosen.names : ""}`
-    : "볼륨에서 찾은 데이터셋 yaml 입니다.";
-
-  const ws = $("weights-select");
-  if (ws.dataset.count !== String(state.pretrained.length)) {
-    ws.dataset.count = String(state.pretrained.length);
-    ws.innerHTML = state.pretrained.length
-      ? state.pretrained.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")
-      : `<option value="">(없음 — 처음부터 학습)</option>`;
-  }
-  if (!$("device-input").value) $("device-input").placeholder = state.training.device || "0";
-
-  const busy = state.training.busy;
-  $("start-btn").disabled = busy || !state.datasets.length;
-  $("cancel-btn").disabled = !busy;
-}
-
-function renderProgress(state) {
-  const run = state.training.run;
-  if (!run) { $("progress").innerHTML = `<p class="desc muted">돌고 있는 학습이 없습니다.</p>`; return; }
-  const pct = run.epochs ? Math.min(100, Math.round((run.epoch / run.epochs) * 100)) : 0;
-  $("progress").innerHTML = `
-    <div class="kv">
-      <span><b>${esc(run.name)}</b></span>
-      <span class="pill ${esc(run.status)}">${esc(run.status)}</span>
-      <span>epoch <b>${run.epoch}</b> / ${run.epochs}</span>
-      <span class="muted">${esc(run.started_at)}</span>
-      ${run.error ? `<span style="color:var(--error)">${esc(run.error)}</span>` : ""}
-    </div>
-    <div class="bar"><i style="width:${pct}%"></i></div>`;
-}
-
-function renderRuns(state) {
-  const rows = state.runs;
-  $("run-rows").innerHTML = rows.length ? rows.map((r) => {
-    const pts = (r.weights || []).join(", ") || "-";
-    const canPublish = (r.weights || []).includes("best.pt");
-    return `<tr>
-      <td><b>${esc(r.name)}</b>${(r.onnx || []).length ? ` <span class="muted">(onnx 있음)</span>` : ""}</td>
-      <td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td>
-      <td class="num">${r.epoch ?? "-"}${r.epochs ? ` / ${r.epochs}` : ""}</td>
-      <td class="muted">${esc(pts)}</td>
-      <td style="text-align:right; white-space:nowrap">
-        <button data-publish="${esc(r.name)}" ${canPublish ? "" : "disabled"}>모델로 쓰기</button>
-        <button class="danger" data-delete="${esc(r.name)}">삭제</button>
-      </td>
-    </tr>`;
-  }).join("") : `<tr><td colspan="5" class="muted">학습 기록이 없습니다.</td></tr>`;
-}
-
-function renderModels(state) {
-  $("model-rows").innerHTML = state.models.length ? state.models.map((m) => `
-    <tr><td>${esc(m.name)}${state.module.model.endsWith("/" + m.name) ? ` <span class="pill running">사용 중</span>` : ""}</td>
-        <td class="num">${m.size_mb}MB</td><td class="muted">${esc(m.mtime)}</td></tr>`).join("")
-    : `<tr><td colspan="3" class="muted">배치된 모델이 없습니다.</td></tr>`;
-}
-
-function renderInference(state) {
+function renderInference() {
   const inf = state.inference || {};
-  const cm = state.module.class_map || {};
-  const codes = Object.entries(cm).map(([k, v]) => `${k} -> ${v}`).join(", ");
-  $("infer-kv").innerHTML = `
-    <span>모드 <b>${esc(state.module.mode)}</b></span>
-    <span>장치 <b>${esc(inf.device || "-")}</b></span>
-    <span>수신 <b class="num">${inf.frames ?? 0}</b></span>
-    <span>발행 <b class="num">${inf.published ?? 0}</b></span>
-    <span>임계값 <b class="num">${state.module.conf_thres}</b></span>`;
+  const m = state.module;
+  $("infer-kv").innerHTML = [
+    ["모드", m.mode === "dry-run" ? "dry-run" : "추론"],
+    ["모델", m.model || "-"],
+    ["장치", inf.device || "-"],
+    ["입력 크기", m.imgsz],
+    ["누적 프레임", (inf.frames ?? 0).toLocaleString()],
+    ["발행", (inf.published ?? 0).toLocaleString()],
+  ].map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
+
   const cams = inf.cameras || [];
-  $("infer-rows").innerHTML = `
-    <tr><td class="muted">할당 카메라</td><td>${cams.length ? cams.join(", ") : "없음 — 플랫폼에서 할당하세요"}</td></tr>
-    <tr><td class="muted">클래스 매핑</td><td>${codes ? esc(codes) : "비어 있음 — CLASS_MAP 을 채우세요"}</td></tr>
-    ${Object.entries(inf.errors || {}).map(([c, e]) =>
-      `<tr><td class="muted">카메라 ${esc(c)}</td><td style="color:var(--error)">${esc(e)}</td></tr>`).join("")}`;
+  const errors = inf.errors || {};
+  $("infer-rows").innerHTML = cams.length
+    ? cams.map((c) => {
+        const err = errors[String(c)];
+        return `<tr><td class="num">카메라 ${c}</td><td>${
+          err ? `<span class="pill unknown">${esc(err)}</span>` : "정상"
+        }</td></tr>`;
+      }).join("")
+    : `<tr><td colspan="2" class="muted">할당된 카메라가 없습니다.
+         플랫폼 관리자 화면에서 이 모듈에 카메라를 할당하세요.</td></tr>`;
 }
 
-async function renderLog() {
-  const { lines } = await api("/api/logs?limit=400");
-  const el = $("log");
-  if (!lines.length) { el.textContent = "로그가 없습니다."; return; }
-  // 사용자가 위로 스크롤해 읽고 있으면 끌어내리지 않는다.
-  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  if (lines.length !== lastLogLen) {
-    el.textContent = lines.join("\n");
-    lastLogLen = lines.length;
-    if (atBottom) el.scrollTop = el.scrollHeight;
-  }
+/* ── 민감도 ────────────────────────────────────────────────────────── */
+
+// 이름과 설명을 코드에 둔다. 값의 뜻을 모르면 슬라이더는 위험하기만 하다.
+const TUNING_META = {
+  conf_thres: ["최소 점수 (conf)", "이보다 낮은 후보는 추론 단계에서 버립니다.", 0.01],
+  iou_thres: ["겹침 기준 (IoU)", "같은 물체로 볼 겹침 정도입니다. 낮출수록 박스가 줄어듭니다.", 0.01],
+  min_conf: ["이벤트 최소 점수", "이 점수 이상일 때만 이벤트로 올립니다. 박스는 그대로 그립니다.", 0.01],
+  min_box_px: ["최소 박스 크기 (px)",
+    "sqrt(가로×세로)가 이보다 작으면 버립니다. 0 이면 안 버립니다. " +
+    "작은 오탐은 라벨에서 지우는 것보다 여기서 거르는 편이 낫습니다.", 1],
+  sample_fps: ["초당 처리 장수", "초당 몇 장을 볼지. 높이면 반응이 빨라지고 CPU 를 더 씁니다.", 0.1],
+};
+
+function renderTuning() {
+  if (document.activeElement && document.activeElement.dataset.tuning) return;
+  const limits = state.limits || {};
+  $("tuning").innerHTML = Object.entries(TUNING_META).map(([key, [label, desc, step]]) => {
+    const lim = limits[key] || { min: 0, max: 1 };
+    const value = state.tuning[key];
+    return `<label>
+      <span>${esc(label)} — <b data-out="${key}">${value}</b></span>
+      <input type="range" data-tuning="${key}" min="${lim.min}" max="${lim.max}"
+             step="${step}" value="${value}" />
+      <em>${esc(desc)}</em>
+    </label>`;
+  }).join("");
+
+  $("tuning").querySelectorAll("[data-tuning]").forEach((input) => {
+    input.oninput = () => {
+      document.querySelector(`[data-out="${input.dataset.tuning}"]`).textContent = input.value;
+    };
+    // 저장은 손을 뗄 때 한 번만 한다. 드래그하는 내내 저장하면 워커가 계속 다시 뜬다.
+    input.onchange = () => saveTuning(input.dataset.tuning, input.value);
+  });
 }
 
-/* ── 폴링 ───────────────────────────────────────────────────────── */
-
-async function tick() {
-  let busy = false;
+async function saveTuning(key, value) {
+  msg("tuning-msg", "저장 중…");
   try {
-    const state = await api("/api/state");
-    busy = state.training.busy;
-    renderNotice(state);
-    renderForm(state);
-    renderProgress(state);
-    renderRuns(state);
-    renderModels(state);
-    renderInference(state);
-    await renderLog();
-  } catch (err) {
-    $("notice").innerHTML = `<div class="warn">모듈에 연결할 수 없습니다: ${esc(err.message)}</div>`;
-  }
-  window.clearTimeout(timer);
-  timer = window.setTimeout(tick, busy ? BUSY_MS : IDLE_MS);
-}
-
-/* ── 조작 ───────────────────────────────────────────────────────── */
-
-$("train-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const body = {
-    name: f.get("name").trim(),
-    data: f.get("data"),
-    weights: f.get("weights") || "",
-    epochs: Number(f.get("epochs")),
-    batch: Number(f.get("batch")),
-    imgsz: Number(f.get("imgsz")),
-    device: f.get("device").trim(),
-  };
-  $("start-btn").disabled = true;
-  try {
-    await api("/api/train", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+    await api("/api/tuning", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: Number(value) }),
     });
-    say($("train-msg"), `학습을 시작했습니다: ${body.name}`, true);
-  } catch (err) {
-    say($("train-msg"), err.message, false);
+    msg("tuning-msg", "저장했습니다. 추론 워커가 곧 새 값으로 다시 뜹니다.", "ok");
+    refresh();
+  } catch (e) {
+    msg("tuning-msg", e.message, "err");
   }
-  tick();
-});
+}
 
-$("cancel-btn").addEventListener("click", async () => {
-  if (!window.confirm("돌고 있는 학습을 취소합니다. 지금까지의 가중치는 남습니다.")) return;
+/* ── 모델 ──────────────────────────────────────────────────────────── */
+
+function renderModels() {
+  const models = state.models || [];
+  $("model-rows").innerHTML = models.length
+    ? models.map((m) => `<tr>
+        <td>
+          <b>${esc(m.name)}</b>${m.active ? ' <span class="pill unknown">사용 중</span>' : ""}
+          ${m.note ? `<div class="muted">${esc(m.note)}</div>` : ""}
+        </td>
+        <td class="num">${m.size_mb}MB</td>
+        <td class="num">${m.classes.length || "-"}</td>
+        <td style="white-space:nowrap">
+          ${m.active ? "" : `<button data-use="${esc(m.name)}">사용</button>`}
+          <button data-show="${esc(m.name)}">클래스</button>
+          ${m.active ? "" : `<button class="danger" data-del="${esc(m.name)}">삭제</button>`}
+        </td>
+      </tr>`).join("")
+    : `<tr><td colspan="4" class="muted">올린 모델이 없습니다.</td></tr>`;
+
+  $("model-rows").querySelectorAll("[data-use]").forEach((b) => {
+    b.onclick = () => act(`/api/models/${b.dataset.use}/use`, "POST",
+                          `${b.dataset.use} 을(를) 적용했습니다.`);
+  });
+  $("model-rows").querySelectorAll("[data-del]").forEach((b) => {
+    b.onclick = () => {
+      if (!confirm(`${b.dataset.del} 을(를) 지웁니다. 되돌릴 수 없습니다.`)) return;
+      act(`/api/models/${b.dataset.del}`, "DELETE", "지웠습니다.");
+    };
+  });
+  $("model-rows").querySelectorAll("[data-show]").forEach((b) => {
+    b.onclick = () => { editingModel = b.dataset.show; dirty = false; renderClasses(); };
+  });
+}
+
+async function act(path, method, okText) {
+  msg("model-msg", "처리 중…");
   try {
-    await api("/api/train/cancel", { method: "POST" });
-    say($("train-msg"), "취소했습니다.", true);
-  } catch (err) {
-    say($("train-msg"), err.message, false);
+    await api(path, { method });
+    msg("model-msg", okText, "ok");
+    await refresh();
+  } catch (e) {
+    msg("model-msg", e.message, "err");
   }
-  tick();
-});
+}
 
-$("run-rows").addEventListener("click", async (e) => {
-  const publish = e.target.dataset.publish;
-  const del = e.target.dataset.delete;
-  const msg = $("run-msg");
+$("upload-btn").onclick = async () => {
+  const file = $("file-input").files[0];
+  if (!file) { msg("upload-msg", "파일을 고르세요.", "err"); return; }
+  const form = new FormData();
+  form.append("file", file);
+  $("upload-btn").disabled = true;
+  msg("upload-msg", `올리는 중… (${(file.size / 1024 / 1024).toFixed(1)}MB)`);
   try {
-    if (publish) {
-      e.target.disabled = true;
-      say(msg, "ONNX 로 내보내는 중입니다. 1~2분 걸립니다.", true);
-      const r = await api("/api/publish", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run: publish, weights: "best.pt" }),
-      });
-      say(msg, `${r.model} (${r.size_mb}MB) 를 배치했습니다. 모듈을 다시 시작하면 이 모델로 돕니다.`, true);
-    } else if (del) {
-      if (!window.confirm(`${del} 산출물을 지웁니다. 가중치도 함께 사라집니다.`)) return;
-      await api(`/api/runs/${encodeURIComponent(del)}`, { method: "DELETE" });
-      say(msg, `${del} 을 지웠습니다.`, true);
-    } else {
-      return;
+    const out = await api("/api/models", { method: "POST", body: form });
+    msg("upload-msg", out.named
+      ? `올렸습니다. 클래스 ${out.classes.length}개를 모델에서 읽었습니다.`
+      : `올렸습니다. 모델에 클래스 이름이 없어 인덱스 ${out.classes.length}개로 만들었습니다 — 이름을 붙여 주세요.`,
+      "ok");
+    $("file-input").value = "";
+    editingModel = out.name;
+    dirty = false;
+    await refresh();
+  } catch (e) {
+    msg("upload-msg", e.message, "err");
+  } finally {
+    $("upload-btn").disabled = false;
+  }
+};
+
+/* ── 탐지 대상 ─────────────────────────────────────────────────────── */
+
+function currentModel() {
+  const models = state.models || [];
+  return models.find((m) => m.name === editingModel)
+      || models.find((m) => m.active) || models[0] || null;
+}
+
+function renderClasses() {
+  const model = currentModel();
+  if (!model) {
+    $("class-rows").innerHTML =
+      `<tr><td colspan="3" class="muted">모델을 먼저 올리세요.</td></tr>`;
+    return;
+  }
+  editingModel = model.name;
+  if (!model.classes.length) {
+    $("class-rows").innerHTML =
+      `<tr><td colspan="3" class="muted">이 모델에서 클래스를 읽지 못했습니다.</td></tr>`;
+    return;
+  }
+
+  const options = (selected) => [`<option value="">(연결 안 함 — 박스만)</option>`]
+    .concat(solutions.map((s) =>
+      `<option value="${esc(s.code)}"${s.code === selected ? " selected" : ""}>
+         ${esc(s.name)} (${esc(s.code)})</option>`))
+    // 플랫폼에서 목록을 못 받았는데 이미 저장된 코드가 있으면 그것도 남겨 둔다.
+    .concat(selected && !solutions.some((s) => s.code === selected)
+      ? [`<option value="${esc(selected)}" selected>${esc(selected)}</option>`] : [])
+    .join("");
+
+  $("class-rows").innerHTML = model.classes.map((c, i) => `<tr>
+      <td><code>${esc(c.key)}</code></td>
+      <td><input data-alias="${i}" value="${esc(c.alias)}"
+                 placeholder="${esc(c.key)}" /></td>
+      <td><select data-item="${i}">${options(c.item)}</select></td>
+    </tr>`).join("");
+
+  $("class-rows").querySelectorAll("input,select").forEach((el) => {
+    el.oninput = () => { dirty = true; };
+  });
+}
+
+$("save-classes").onclick = async () => {
+  const model = currentModel();
+  if (!model) return;
+  const rows = model.classes.map((c, i) => ({
+    key: c.key,
+    alias: document.querySelector(`[data-alias="${i}"]`).value,
+    item: document.querySelector(`[data-item="${i}"]`).value,
+  }));
+  msg("class-msg", "저장 중…");
+  try {
+    await api(`/api/models/${model.name}/classes`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows }),
+    });
+    dirty = false;
+    msg("class-msg", "저장했습니다. 추론 워커가 곧 새 설정으로 다시 뜹니다.", "ok");
+    await refresh();
+  } catch (e) {
+    msg("class-msg", e.message, "err");
+  }
+};
+
+/* ── 기동 ──────────────────────────────────────────────────────────── */
+
+async function loadSolutions() {
+  try {
+    const out = await api("/api/solutions");
+    solutions = out.items || [];
+    if (out.error) {
+      $("class-msg").textContent = out.error + " — 탐지 항목을 고를 수 없습니다.";
+      $("class-msg").className = "msg err";
     }
-  } catch (err) {
-    say(msg, err.message, false);
-  }
-  tick();
-});
+  } catch { solutions = []; }
+}
 
-tick();
+(async () => {
+  await loadSolutions();
+  await refresh();
+  setInterval(refresh, 3000);
+  // 탐지 항목은 플랫폼에서 가끔 늘어난다. 자주 볼 필요는 없다.
+  setInterval(loadSolutions, 30000);
+})();

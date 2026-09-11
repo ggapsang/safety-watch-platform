@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, "/app")
+
+import settings  # noqa: E402
 
 from _sdk import BaseConfig, class_map_from_env, env, flag, num  # noqa: E402
 
@@ -57,15 +59,17 @@ class Config(BaseConfig):
     min_box_px: float = 0.0
     dry_run: bool = False
 
-    # ── 학습·화면 (이 모듈만 갖는 것) ──
+    # 모델 클래스 이름 -> 사람이 붙인 이름. 화면에 그려지는 것은 이 값이다.
+    # class_map(항목 코드)과 층이 다르다 — 이름은 보여 주기용, 코드는 이벤트 승격용이라
+    # 하나로 합치면 '이벤트로 안 올리지만 이름은 보고 싶은' 클래스를 표현할 수 없다.
+    aliases: dict[str, str] = field(default_factory=dict)
+
+    # ── 화면 (이 모듈만 갖는 것) ──
     serve_port: int = 8000               # 컨테이너 안에서 화면·API 를 띄우는 포트
     # 브라우저가 닿는 주소. 플랫폼이 이 주소를 탭으로 감싸 보여 준다.
     public_url: str = "http://localhost:11990"
-    runs_dir: str = "/training/runs"     # 학습 산출물
-    models_dir: str = "/models"          # 추론이 쓰는 모델과 사전학습 가중치
-    # 데이터셋 yaml 을 찾을 곳. 라벨링·전처리는 이 모듈의 일이 아니다.
-    dataset_dirs: tuple[str, ...] = ("/training/datasets", "/datasets")
-    train_device: str = "0"              # 학습에 쓸 장치. GPU 번호 또는 cpu
+    # 모델 파일과 이 모듈의 설정(module.json)이 같이 놓이는 곳. 볼륨째 옮기면 따라간다.
+    models_dir: str = "/models"
 
 
 def load() -> Config:
@@ -87,19 +91,44 @@ def load() -> Config:
 
     cfg.serve_port = int(num("SERVE_PORT", 8000))
     cfg.public_url = env("PUBLIC_URL", "http://localhost:11990").rstrip("/")
-    cfg.runs_dir = env("RUNS_DIR", "/training/runs")
     cfg.models_dir = env("MODELS_DIR", "/models")
-    roots = env("DATASET_DIRS")
-    if roots:
-        cfg.dataset_dirs = tuple(p.strip() for p in roots.split(",") if p.strip())
-    cfg.train_device = env("TRAIN_DEVICE", "0")
+
+    # 화면에서 고친 값이 env 를 이긴다. 파일이 없으면 env 그대로 — 화면에 한 번도
+    # 들어가지 않은 현장도 그대로 돌아야 한다.
+    apply_settings(cfg, settings.load(Path(cfg.models_dir)))
 
     if not cfg.dry_run and (cfg.model_path is None or not cfg.model_path.is_file()):
         # 죽이지 않고 dry-run 으로 내려앉는다. 모델이 아직 없는 환경에서 컨테이너가
         # 재시작을 반복하는 것보다, 배관이 도는 것을 보여 주는 편이 낫다.
-        log.warning("모델 파일(%s)이 없습니다 — dry-run 으로 전환합니다", cfg.model_path)
+        log.warning("모델 파일(%s)이 없습니다 — dry-run 으로 전환합니다. "
+                    "모듈 화면(%s)에서 모델을 올리세요.", cfg.model_path, cfg.public_url)
         cfg.dry_run = True
     if not cfg.class_map:
-        log.warning("CLASS_MAP 이 비어 있습니다 — 판정 결과를 항목 코드로 옮길 수 없습니다. "
-                    "플랫폼에서 탐지 항목을 먼저 만들고 CLASS_MAP 을 채우세요.")
+        log.warning("클래스와 탐지 항목의 연결이 비어 있습니다 — 박스는 그리지만 이벤트는 "
+                    "만들지 않습니다. 모듈 화면(%s)에서 연결하세요.", cfg.public_url)
     return cfg
+
+
+def apply_settings(cfg: Config, s: "settings.Settings") -> None:
+    """설정 파일의 값을 설정 객체에 덮어쓴다.
+
+    기동할 때와, 화면에서 값을 고쳐 워커를 다시 띄울 때 같은 함수를 쓴다 — 두 경로가
+    갈리면 '화면에서 바꾼 것과 재시작 후가 다른' 일이 생긴다.
+    """
+    for name in settings.TUNING:
+        if name in s.tuning:
+            setattr(cfg, name, s.tuning[name])
+
+    if s.active_model:
+        candidate = Path(cfg.models_dir) / s.active_model
+        if candidate.is_file():
+            cfg.model_path = candidate
+            cfg.dry_run = False
+        else:
+            log.warning("설정이 가리키는 모델이 없습니다: %s", candidate)
+
+    model = cfg.model_path.name if cfg.model_path else ""
+    if model and s.rows(model):
+        # 화면에서 만든 표가 있으면 그것이 CLASS_MAP env 를 대신한다.
+        cfg.class_map = s.class_map(model)
+        cfg.aliases = s.alias_map(model)

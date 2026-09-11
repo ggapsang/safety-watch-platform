@@ -8,20 +8,9 @@ paho-mqtt>=2.1
 fastapi>=0.115
 uvicorn>=0.32
 pydantic>=2.9
+# 모델 파일 업로드(multipart)를 받으려면 필요하다.
+python-multipart>=0.0.9
 
-# 학습 (vendor/yolov7 이 요구하는 것)
-# torch 는 Dockerfile 에서 인덱스를 골라 따로 설치한다 — CPU 판과 CUDA 판의 용량이
-# 열 배 넘게 달라서, 여기 고정하면 GPU 없는 곳에서 몇 GB 를 헛되게 받는다.
-PyYAML>=6.0
-tqdm>=4.66
-# vendor/yolov7 의 models/common.py 가 최상단에서 import 한다(가중치 자동 다운로드용).
-requests>=2.32
-# FLOPs 표시. 없어도 돌지만 학습 로그에 모델 크기가 안 찍혀 비교가 어려워진다.
-thop>=0.1.1
-matplotlib>=3.8
-scipy>=1.11
-pandas>=2.2
-seaborn>=0.13
-tensorboard>=2.16
-onnx>=1.16
-onnx-simplifier>=0.4
+# 학습 의존성(torch·scipy·pandas·matplotlib·seaborn·tensorboard·onnx-simplifier 등)은
+# 걷어냈다. 학습은 이 모듈의 일이 아니다 — refs/yolov7-training/ 을 보라.
+# 런타임은 onnxruntime 하나이고, 그래서 이미지가 GB 단위로 줄었다.

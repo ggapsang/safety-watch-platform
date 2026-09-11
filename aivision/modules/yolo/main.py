@@ -1,22 +1,20 @@
-"""서버 YOLO 모듈 — 학습과 추론을 한 컨테이너에서.
+"""객체감지 모듈 — RTSP 를 받아 추론한다.
 
-이 모듈은 다른 모듈과 성격이 다르다. 카메라 메타데이터 모듈은 켜 두면 알아서 도는데,
-이쪽은 **사람이 할 일이 있다** — 데이터셋을 고르고, 학습을 돌리고, 결과를 보고 어느
-가중치를 쓸지 정한다. 그래서 자기 화면과 API 를 직접 들고 있다(기본 11990).
+**학습은 여기 없다.** 예전에는 한 컨테이너에서 학습까지 돌렸는데 걷어냈다. 관제 서버는
+24시간 떠 있어야 하는데 학습은 몇 시간짜리 배치 작업이고 GPU 와 수십 GB 데이터셋을
+요구한다 — 같이 두면 학습 한 번이 추론을 굶긴다. 학습 코드는 `refs/yolov7-training/`
+에 참조용으로 남겨 두었고, 학습은 GPU 워크스테이션에서 돌린 뒤 ONNX 로 내보내
+이 화면에서 올리면 된다.
+
+그래서 런타임은 onnxruntime 하나다. torch 를 담지 않으니 이미지가 가볍다.
+
+이 모듈이 자기 화면을 갖는 이유는 그대로다 — **사람이 할 일이 있다.** 모델을 올리고,
+그 모델이 무엇을 잡는지 확인해 이름을 붙이고, 플랫폼 탐지 항목에 연결하고, 민감도를
+맞춘다. 그것을 플랫폼 화면에 넣으면 코어가 YOLO 를 알게 된다(매니페스토 2번).
 
 한 프로세스에 둘을 담는다.
   · 추론 워커   SDK Runner. 배경 스레드에서 돈다. 판정은 MQTT 로 발행한다.
   · API·화면    FastAPI/uvicorn. 메인 스레드에서 돈다.
-학습은 이 프로세스가 아니라 **자식 프로세스**로 돌린다(`training.py` 참조) — 몇 시간을
-돌고 죽을 때 프로세스를 데려가므로, 같이 두면 추론과 화면이 함께 죽는다.
-
-셋을 한 컨테이너에 두는 이유는 같은 것을 보기 때문이다. 학습이 만든 가중치를 추론이 읽고,
-화면은 그 둘의 상태를 보여 준다. 나누면 모델 파일을 공유 볼륨으로 주고받고 상태를 또
-API 로 물어야 하는데, 얻는 것이 없다.
-
-주의: GPU 는 하나다. 학습이 도는 동안 추론은 느려진다. 그것이 문제가 되는 현장이면
-학습은 다른 PC 에서 돌리고(PLATFORM_URL 만 바꾸면 원격 모듈이 된다) 이 컨테이너는
-추론만 맡기면 된다.
 
 실행
   python main.py                  모델이 있으면 추론, 없으면 dry-run 으로 내려앉는다
@@ -37,7 +35,6 @@ from typing import Iterator
 sys.path.insert(0, "/app")                     # _sdk 가 옆에 놓인다
 
 import config as config_module                 # noqa: E402
-import training                                # noqa: E402
 from _sdk import (Debouncer, Runner, Source, WorkItem, configure_logging,  # noqa: E402
                   main_loop)
 
@@ -147,6 +144,7 @@ class YoloSource(_Base):
         if cap is None or model is None:
             raise RuntimeError("스트림이 열리지 않았습니다")
         min_px = self.cfg.min_box_px
+        aliases = self.cfg.aliases
 
         while not stop.is_set():
             ok, frame = cap.read()
@@ -163,10 +161,15 @@ class YoloSource(_Base):
                     # 감독이 모순되어 큰 목표의 성능까지 떨어졌다(mAP 0.851 -> 0.737).
                     continue
                 box = det.to_box()
-                live.append(box)                       # 화면에는 클래스 이름 그대로
+                # 사람이 붙인 이름이 있으면 그것을 그린다. 없으면 모델이 들고 온 이름,
+                # 그것도 없으면 인덱스다(inference.Model.class_name).
+                box["label"] = aliases.get(box["label"], box["label"])
+                live.append(box)
                 code = model.item_code(det.cls)
-                if code:                               # 표에 없는 클래스는 이 현장의 관심 밖
-                    found.setdefault(code, []).append(dict(box, label=code))
+                if code:                               # 연결되지 않은 클래스는 박스만 그린다
+                    # 이벤트에 붙는 박스도 같은 이름을 쓴다. 예전에는 항목 코드를 넣어
+                    # 이벤트 상세창에 'ITEM-001' 이 그려졌다 — 사람이 읽을 것이 아니다.
+                    found.setdefault(code, []).append(dict(box))
             self.last_found = found
             yield live
 
@@ -214,19 +217,21 @@ def main(argv: list[str]) -> int:
         cfg.dry_run = True
     serve = "--no-serve" not in argv
 
-    make = DryRunSource if cfg.dry_run else YoloSource
+    # 리스트에 담는 이유: 화면에서 모델을 올리면 dry-run -> 추론으로 갈아타야 하는데,
+    # 이름에 그냥 묶어 두면 Runner 가 들고 있는 람다가 옛 값을 계속 본다.
+    make_source = [DryRunSource if cfg.dry_run else YoloSource]
     log.info("모듈 %s 기동 (%s)", cfg.module_id,
              "dry-run" if cfg.dry_run else f"추론 · {cfg.model_path}")
 
     runner = Runner(
         cfg,
-        make_source=lambda item: make(cfg, item),
+        make_source=lambda item: make_source[0](cfg, item),
         on_boxes=on_boxes,
         on_stream_end=on_stream_end,
         # 플랫폼이 이 주소를 탭으로 감싸 보여 준다. 브라우저가 닿는 주소여야 하므로
         # 컨테이너 이름이 아니라 밖에서 보이는 주소를 넣는다.
         endpoint=cfg.public_url,
-        description="서버에서 RTSP 를 받아 추론하고, 학습도 여기서 돌린다",
+        description="서버에서 RTSP 를 받아 객체를 탐지한다",
     )
 
     if not serve:
@@ -241,8 +246,19 @@ def main(argv: list[str]) -> int:
     worker = threading.Thread(target=runner.run, name="inference", daemon=True)
     worker.start()
 
-    trainer = training.Trainer(Path(cfg.runs_dir))
-    app = api.create_app(cfg, trainer, runner.status)
+    def reload_workers() -> None:
+        """설정이 바뀌었으니 워커를 새 설정으로 다시 띄운다.
+
+        직접 다시 만들지 않고 **멈추기만** 한다. Runner.reconcile 이 죽은 워커를
+        다음 폴링에서 되살리는데, 그때 make_source 가 갱신된 cfg 를 읽는다. 여기서
+        따로 만들면 워커 생성 경로가 둘이 되고, 일감 목록과 어긋날 수 있다.
+        """
+        make_source[0] = DryRunSource if cfg.dry_run else YoloSource
+        for w in list(runner.workers.values()):
+            w.stop()
+        log.info("설정이 바뀌어 워커를 다시 띄웁니다 (%d대)", len(runner.workers))
+
+    app = api.create_app(cfg, runner.status, reload_workers)
     log.info("모듈 화면: %s (컨테이너 안에서는 :%d)", cfg.public_url, cfg.serve_port)
 
     try:
@@ -250,7 +266,6 @@ def main(argv: list[str]) -> int:
     finally:
         runner.stop_event.set()
         worker.join(timeout=10)
-        trainer.cancel()
     return 0
 
 

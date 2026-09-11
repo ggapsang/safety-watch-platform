@@ -211,6 +211,9 @@ class _Backend:
     def infer(self, blob: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
+    def metadata_names(self) -> list[str]:
+        return []
+
 
 class OnnxBackend(_Backend):
     def __init__(self, path: Path, device: str = "cuda") -> None:
@@ -263,35 +266,17 @@ class OnnxBackend(_Backend):
         return []
 
 
-class TorchScriptBackend(_Backend):
-    def __init__(self, path: Path, device: str = "cuda") -> None:
-        import torch
-
-        self.torch = torch
-        use_cuda = device == "cuda" and torch.cuda.is_available()
-        if device == "cuda" and not use_cuda:
-            log.warning("torch.cuda 사용 불가 -> CPU 폴백")
-        self.device = "cuda" if use_cuda else "cpu"
-        self.model = torch.jit.load(str(path), map_location=self.device)
-        self.model.eval()
-        log.info("TorchScript 백엔드: device=%s", self.device)
-
-    def infer(self, blob: np.ndarray) -> np.ndarray:
-        torch = self.torch
-        with torch.no_grad():
-            out = self.model(torch.from_numpy(blob).to(self.device))
-            if isinstance(out, (tuple, list)):
-                out = out[0]
-            return out.detach().float().cpu().numpy()
-
-
 def _load_backend(path: Path, device: str) -> _Backend:
-    suffix = path.suffix.lower()
-    if suffix == ".onnx":
+    """ONNX 만 받는다.
+
+    예전에는 TorchScript(.pt) 도 열었는데, 그러자고 torch 를 이미지에 담으면 1GB 가
+    넘는다. 학습은 이 모듈의 일이 아니게 되었고(refs/yolov7-training), 학습하는 쪽에서
+    ONNX 로 내보내면 그만이다. 런타임은 onnxruntime 하나로 족하다.
+    """
+    if path.suffix.lower() == ".onnx":
         return OnnxBackend(path, device)
-    if suffix in (".pt", ".torchscript"):
-        return TorchScriptBackend(path, device)
-    raise ValueError(f"지원하지 않는 모델 형식입니다: {path.name} (.onnx 또는 .torchscript)")
+    raise ValueError(f"지원하지 않는 모델 형식입니다: {path.name} "
+                     "(.onnx 만 받습니다 — 학습한 쪽에서 ONNX 로 내보내세요)")
 
 
 # ────────────────────────────────────────────────────────────── 모델
@@ -358,11 +343,41 @@ class Model:
 def load(path: Path, device: str, imgsz: int, conf_thres: float, iou_thres: float,
          class_map: dict[str, str], layout: str = "auto") -> Model:
     model = Model(path, device, imgsz, conf_thres, iou_thres, class_map, layout)
-    if isinstance(model.backend, OnnxBackend):
-        # 클래스 이름을 여기서 먼저 읽는다 — 이름 수가 출력 열 해석을 확정해 준다.
-        model.names = model.backend.metadata_names()
+    # 클래스 이름을 여기서 먼저 읽는다 — 이름 수가 출력 열 해석을 확정해 준다.
+    model.names = model.backend.metadata_names()
     if model.names:
         log.info("모델 클래스: %s", ", ".join(model.names))
     else:
-        log.info("모델에 클래스 이름이 없습니다 - CLASS_MAP 의 키를 인덱스(0, 1, ...)로 쓰세요")
+        log.info("모델에 클래스 이름이 없습니다 — 모듈 화면에서 인덱스(0, 1, …)에 "
+                 "이름을 붙이세요")
     return model
+
+
+def inspect(path: Path) -> tuple[list[str], int]:
+    """모델 파일 하나를 열어 (클래스 이름, 클래스 수)를 돌려준다.
+
+    업로드받은 파일이 정말 열리는지 확인하는 자리이기도 하다. 여기서 걸러 내지 않으면
+    깨진 파일이 모델 폴더에 남고, 워커가 뜰 때마다 죽는다 — 그때는 왜 죽는지 화면에
+    나오지 않는다.
+
+    이름이 비어 있을 수 있다. export 가 메타데이터에 `names` 를 안 심은 모델이 흔하다.
+    그 경우 개수만 알 수 있고, 이름은 사람이 화면에서 붙인다.
+    """
+    backend = OnnxBackend(path, "cpu")
+    names = backend.metadata_names()
+    if names:
+        return names, len(names)
+
+    # 이름이 없으면 출력 모양에서 클래스 수를 추정한다. v5/v7 은 [x,y,w,h,obj,cls...],
+    # v8 은 [x,y,w,h,cls...] 라 한 열 차이가 나는데, 여기서는 '몇 개쯤' 만 알면 된다.
+    try:
+        shape = backend.session.get_outputs()[0].shape
+        dims = [d for d in shape if isinstance(d, int)]
+        if dims:
+            width = min(dims) if len(dims) > 1 else dims[0]
+            for offset in (5, 4):                 # v5/v7 먼저, 그다음 v8
+                if width > offset:
+                    return [], width - offset
+    except Exception:                             # noqa: BLE001
+        log.debug("출력 모양에서 클래스 수를 읽지 못했습니다", exc_info=True)
+    return [], 0
