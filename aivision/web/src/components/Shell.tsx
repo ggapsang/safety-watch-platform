@@ -77,11 +77,13 @@ function moduleGroup(modules: AnalyticsModule[]): { group: string; items: NavIte
   const withUi = modules.filter((m) => m.endpoint && m.enabled);
   if (!withUi.length) return [];
   return [{
-    group: "모듈",
+    // '모듈' 이 아니라 '플러그인' 이라고 부른다. 코어는 이것들이 무엇을 하는지 모르고,
+    // 붙고 떨어지는 것이 코어 코드와 무관하다 — 부품이 아니라 꽂는 것이다.
+    group: "플러그인",
     items: withUi.map((m) => ({
       to: `/modules/${m.id}`,
       label: m.name || m.id,
-      desc: m.description || "모듈이 직접 띄우는 화면",
+      desc: m.description || "플러그인이 직접 띄우는 화면",
       icon: <IconModule />,
     })),
   }];
