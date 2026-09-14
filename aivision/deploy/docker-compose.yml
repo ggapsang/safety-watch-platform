@@ -270,6 +270,58 @@ services:
       LIVE_MIN_INTERVAL: ${META_LIVE_MIN_INTERVAL:-0.2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
+  # AMR 과 사람의 충돌 위험.
+  #
+  # **영상을 열지 않는 첫 플러그인이다.** 다른 플러그인이 이미 낸 박스를 브로커에서
+  # 받아(aivision/live/{cam}) 기하만 따진다. 그래서 RTSP 도 모델도 필요 없고, 같은
+  # 프레임을 두 번 추론하지 않는다. 사람은 카메라 내장 분석(mod-camera-meta)이,
+  # AMR 은 우리 모델(mod-yolo)이 잡은 것을 쓴다.
+  #
+  # 그 둘이 꺼져 있으면 이 플러그인은 조용히 아무것도 하지 않는다 — 먹을 것이 없기
+  # 때문이다. 고장이 아니라 입력이 없는 것이고, 화면에 그렇게 보인다.
+  #
+  # depends_on 에 mod-yolo·mod-camera-meta 를 넣지 않는다. 브로커로만 이어져 있어
+  # 기동 순서가 상관없고, 넣으면 '그 둘이 있어야 도는 것' 처럼 보여 계약을 오해하게 한다.
+  mod-collision:
+    build:
+      # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
+      context: ../modules
+      dockerfile: collision/Dockerfile
+    ports:
+      # 플러그인 자기 화면·API. 플랫폼 탭이 이 주소를 감싼다.
+      - "${COLLISION_UI_PORT:-12010}:8000"
+    restart: unless-stopped
+    depends_on:
+      base-app:
+        condition: service_started
+      base-broker:
+        condition: service_started
+    volumes:
+      # 위험 구역·임계값 등 화면에서 고친 설정. 플러그인이 자기 설정을 자기가 보관한다
+      # (코어에 저장하는 길은 없다 — 있으면 코어가 플러그인의 설정 모양을 알게 된다).
+      - collision-config:/config
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      # 컨테이너 네트워크 안에서 붙는다. 원격 PC 에서 돌릴 때는 호스트 주소로 바꾼다.
+      PLATFORM_URL: http://base-app:8000
+      MQTT_HOST: base-broker
+      MQTT_PORT: "1883"
+      MODULE_ID: ${COLLISION_MODULE_ID:-collision}
+      MODULE_NAME: ${COLLISION_MODULE_NAME:-충돌 위험}
+      # 브라우저가 닿는 주소. 컨테이너 이름을 넣으면 서버에서는 되고 화면에서는 안 된다.
+      # 다른 PC 에서 접속시킬 거라면 localhost 대신 서버 PC 의 IP 를 넣어야 한다.
+      PUBLIC_URL: ${COLLISION_PUBLIC_URL:-http://localhost:12010}
+      # 구독할 발행자. 비우면 전부 받는다(자기 출력은 언제나 뺀다).
+      SRC_MODULES: ${COLLISION_SRC_MODULES:-yolo-server,camera-meta}
+      # 라벨은 고정된 코드가 아니라 화면에서 사람이 바꿀 수 있는 이름이다. 객체감지
+      # 플러그인에서 표시 이름을 고치면 여기도 따라 바꿔야 한다.
+      AMR_LABEL: ${COLLISION_AMR_LABEL:-자율주행로봇}
+      PERSON_LABEL: ${COLLISION_PERSON_LABEL:-Human}
+      # 낼 탐지 항목 코드. 플랫폼에 먼저 만들어 두어야 이벤트가 된다.
+      RISK_ITEM: ${COLLISION_RISK_ITEM:-COLLISION_RISK}
+      COLLISION_ITEM: ${COLLISION_COLLISION_ITEM:-COLLISION}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
 # 볼륨 이름은 서비스 이름을 따라 바꾸지 않는다. 볼륨은 이름으로 찾으므로, 바꾸는 순간
 # 새 빈 볼륨이 생기고 기존 DB·녹화가 통째로 사라진다. 이름이 옛 서비스명을 닮은 것은
 # 그 대가에 비하면 사소하다.
@@ -279,3 +331,4 @@ volumes:
   media-data:      # 플랫폼 자산 — 스냅샷과 이벤트 클립, 오래 보관 (base-app)
   mqtt-data:       # 브로커 영속 세션 (base-broker)
   mqtt-log:        # 브로커 로그 (base-broker)
+  collision-config:  # 위험 구역·임계값 — 화면에서 고친 설정 (mod-collision)

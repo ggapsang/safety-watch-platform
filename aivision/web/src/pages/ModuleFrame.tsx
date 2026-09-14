@@ -80,10 +80,15 @@ export function ModuleFrame() {
         </>
       }
     >
+      {/* 안내문에 플러그인 이름을 넣지 않는다. 예전에는 'docker compose --profile yolo
+        * up -d' 가 박혀 있어서, 어느 플러그인이 죽든 yolo 를 올리라고 말했다. 코어가
+        * 특정 플러그인을 아는 순간 매니페스토 2번이 깨지고, 실제로 그 명령은 profile 을
+        * 걷어낸 뒤로 아무 일도 하지 않는 낡은 문구가 되어 있었다. */}
       {!mod.alive && (
         <p className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-[12.5px] text-[#8a6708]">
-          모듈이 heartbeat 를 보내지 않고 있습니다. 컨테이너가 내려갔다면 아래 화면도 비어
-          있을 것입니다. <code className="font-mono">docker compose --profile yolo up -d</code>
+          이 플러그인이 heartbeat 를 보내지 않고 있습니다. 컨테이너가 내려갔다면 아래 화면도
+          비어 있을 것입니다. <code className="font-mono">docker compose ps</code> 로 도는지
+          확인하세요.
         </p>
       )}
       <Card padded={false} className="overflow-hidden">

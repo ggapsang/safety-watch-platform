@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>충돌 위험 — 보정과 판정 설정</title>
+<!--
+  모듈 화면. 객체감지 모듈과 같은 방식이다 — 빌드 도구 없이 정적 파일 두 개.
+
+  여기서 사람이 하는 일은 셋이다.
+    1. 바닥 4점을 찍어 호모그래피를 잡는다 (이것이 없으면 미터를 잴 수 없다)
+    2. 어떤 라벨이 AMR 이고 사람인지 알려 준다 (라벨은 화면에서 바뀐다)
+    3. 위험 임계값을 현장에 맞춘다
+
+  색과 글꼴은 플랫폼 토큰(web/src/styles/theme.css)에서 옮겨 왔다. 탭 안에 iframe 으로
+  들어가므로 경계가 튀지 않아야 한다.
+-->
+<style>
+  :root {
+    --canvas: #faf9f5; --surface-soft: #f5f0e8; --surface-card: #efe9de;
+    --ink: #141413; --body-strong: #252523; --body: #3d3d3a;
+    --muted: #6c6a64; --muted-soft: #8e8b82;
+    --primary: #cc785c; --primary-active: #a9583e; --primary-soft: #f0ddd3;
+    --success: #5db872; --warning: #d4a017; --error: #c64545;
+    --hairline: #e6dfd8; --dark: #181715;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 22px 24px 40px;
+    background: var(--canvas); color: var(--body);
+    font: 14px/1.55 "Pretendard", -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  h1 { margin: 0 0 4px; font-size: 19px; color: var(--ink); letter-spacing: -0.01em; }
+  h2 { margin: 0 0 3px; font-size: 14.5px; color: var(--body-strong); }
+  h3 { margin: 14px 0 6px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+  .sub { margin: 0 0 20px; font-size: 12.5px; color: var(--muted); }
+  .grid { display: grid; gap: 18px; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); }
+  @media (max-width: 980px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .card {
+    background: #fff; border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 16px 17px;
+  }
+  .card + .card { margin-top: 16px; }
+  .desc { margin: 0 0 13px; font-size: 12px; color: var(--muted); }
+  label { display: block; margin-bottom: 11px; font-size: 12.5px; color: var(--body-strong); }
+  label > span { display: block; margin-bottom: 4px; font-weight: 600; }
+  label > em { display: block; margin-top: 3px; font-size: 11.5px; font-style: normal; color: var(--muted-soft); }
+  input, select {
+    width: 100%; padding: 7px 9px; font: inherit; font-size: 13px; color: var(--body-strong);
+    background: var(--canvas); border: 1px solid var(--hairline); border-radius: 7px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--primary-soft); border-color: var(--primary); }
+  .row { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+  button {
+    padding: 7px 14px; font: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--body-strong); background: var(--canvas);
+    border: 1px solid var(--hairline); border-radius: 7px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary-active); }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover:not(:disabled) { background: var(--primary-active); color: #fff; }
+  button.danger:hover:not(:disabled) { border-color: var(--error); color: var(--error); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--hairline); }
+  th { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+  td.num { font-variant-numeric: tabular-nums; }
+  td input { padding: 5px 7px; font-size: 12.5px; }
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 99px;
+    font-size: 11px; font-weight: 600;
+  }
+  .pill.off { background: var(--surface-card); color: var(--muted); }
+  .pill.on { background: #dff0e2; color: #2f7a44; }
+  .pill.warn { background: #fdf1d6; color: #8a6708; }
+  .pill.err { background: #f8dede; color: #9a3434; }
+  .kv { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; margin-bottom: 12px; }
+  .kv b { color: var(--body-strong); }
+  .warn {
+    margin: 0 0 14px; padding: 10px 12px; border-radius: 9px;
+    background: #fdf6e3; border: 1px solid #f0dfae; color: #8a6708; font-size: 12.5px;
+  }
+  .msg { min-height: 18px; margin-top: 9px; font-size: 12px; }
+  .msg.ok { color: #2f7a44; } .msg.err { color: var(--error); }
+  .muted { color: var(--muted); }
+  code { font: 12px ui-monospace, Consolas, monospace; color: var(--body-strong); }
+  [hidden] { display: none !important; }
+
+  /* 슬라이더 + 숫자. 바로는 정밀 조정이 안 되고, 숫자만 두면 감이 안 온다 */
+  .tune { display: grid; gap: 9px; align-items: center; grid-template-columns: 1fr 84px; }
+  .tune input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
+  .tune input[type="range"] { padding: 0; background: none; border: none; }
+
+  /* 플랫폼 탭 안(iframe)일 때.
+     플랫폼이 이미 모듈 이름과 설명을 프레임 위에 그려 준다. 같은 제목을 한 번 더
+     그리면 가뜩이나 낮은 프레임(약 520~700px)에서 두 줄을 그냥 버리는 셈이다.
+     주소로 직접 열었을 때는 제목이 있어야 하므로 통째로 지우지 않고 여기서만 감춘다. */
+  body.embedded { padding-top: 14px; }
+  body.embedded h1 { display: none; }
+
+  /* 보정 캔버스 */
+  .shot { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+  .shot img {
+    display: block; max-width: 100%; border-radius: 9px; border: 1px solid var(--hairline);
+    cursor: crosshair;
+    /* 프레임 높이에 맞춘다. 4:3 스냅샷을 폭에 맞춰 늘리면 좌표 입력 표가 화면 밖으로
+       밀려나, 점을 찍고 스크롤해 값을 적고 다시 올라와야 한다. vh 는 iframe 안에서
+       프레임 높이를 가리키므로 임베드·직접 열기 양쪽에서 뜻이 맞는다. */
+    max-height: 56vh; width: auto;
+  }
+  .shot .dot {
+    position: absolute; width: 20px; height: 20px; margin: -10px 0 0 -10px;
+    border-radius: 50%; border: 2px solid #fff; background: var(--primary);
+    color: #fff; font: 600 11px/16px sans-serif; text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none;
+  }
+  .shot .missing {
+    display: flex; align-items: center; justify-content: center; min-height: 220px;
+    padding: 20px; border: 1px dashed var(--hairline); border-radius: 9px;
+    background: var(--surface-soft); color: var(--muted); font-size: 12.5px;
+    line-height: 1.5; text-align: center;
+  }
+  .shots { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+  .shots > .side { flex: 1 1 240px; min-width: 240px; }
+  .evidence { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .evidence a { display: block; }
+  .evidence img {
+    width: 108px; border-radius: 7px; border: 1px solid var(--hairline);
+  }
+  .feed { max-height: 320px; overflow: auto; }
+  .feed .when { color: var(--muted-soft); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <h1>충돌 위험 — 보정과 판정 설정</h1>
+  <p class="sub">
+    이 모듈은 <b>영상을 열지 않습니다</b>. 다른 모듈이 이미 낸 박스(<code>aivision/live</code>)를
+    받아 AMR 과 사람의 거리를 재고 위험을 판정합니다. 그래서 여기서 할 일은
+    <b>바닥 4점 보정</b>과 <b>라벨·항목 연결</b>, 그리고 임계값 조정입니다.
+  </p>
+
+  <div id="notice"></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>상태</h2>
+        <p class="desc">
+          담당 카메라는 플랫폼 관리자 화면에서 이 모듈에 할당합니다. 여기서는 바꿀 수 없습니다.
+        </p>
+        <div class="kv" id="status-kv"></div>
+        <table>
+          <thead><tr><th>카메라</th><th>보정</th><th>트랙</th><th>상태</th></tr></thead>
+          <tbody id="status-rows"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>라벨 연결</h2>
+        <p class="desc">
+          받은 박스의 <code>label</code> 중 무엇이 AMR 이고 무엇이 사람인지 알려 주세요.
+          라벨은 발행하는 쪽 화면에서 사람이 바꿀 수 있어 코드에 박아 둘 수 없습니다.
+          쉼표로 여러 개를 적을 수 있습니다.
+        </p>
+        <label>
+          <span>AMR 라벨</span>
+          <input id="amr-labels" placeholder="자율주행로봇, AMR" />
+        </label>
+        <label>
+          <span>사람 라벨</span>
+          <input id="person-labels" placeholder="Human, 사람" />
+        </label>
+        <div id="seen-labels" class="desc"></div>
+        <button class="primary" id="save-labels">저장</button>
+        <div class="msg" id="labels-msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>탐지 항목 연결</h2>
+        <p class="desc">
+          판정을 플랫폼의 어느 항목으로 올릴지 고릅니다. 항목이 목록에 없으면
+          <b>플랫폼에서 먼저 만들어야</b> 합니다 — 모듈이 항목을 만들 수는 없습니다.
+          비워 두면 판정은 하되 이벤트를 쌓지 않습니다.
+        </p>
+        <label>
+          <span>위험 알람 (주의·임박)</span>
+          <select id="risk-item"></select>
+        </label>
+        <label>
+          <span>충돌 확정</span>
+          <select id="collision-item"></select>
+        </label>
+        <button class="primary" id="save-items">저장</button>
+        <div class="msg" id="items-msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>임계값</h2>
+        <p class="desc">
+          바꾸면 곧바로 저장되고 판정에 반영됩니다. 컨테이너를 다시 띄울 필요는 없습니다.
+        </p>
+        <div id="tuning"></div>
+        <div class="msg" id="tuning-msg"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>바닥 보정 <span class="muted" id="calib-of"></span></h2>
+        <p class="desc">
+          스냅샷 위에서 바닥의 <b>네 점</b>을 찍고, 각 점의 실제 좌표(미터)를 적으세요.
+          현장의 직사각형 표시선·팔레트 자리처럼 <b>치수를 아는 사각형</b>의 네 모서리가
+          가장 쉽습니다. 원점과 축 방향은 마음대로 정해도 되고, 네 점이 같은 기준이면 됩니다.
+          <br />
+          보정이 없으면 거리를 미터로 잴 수 없어 <b>판정을 하지 않습니다</b>.
+        </p>
+        <label>
+          <span>카메라</span>
+          <select id="camera-pick"></select>
+        </label>
+        <div class="shots">
+          <div class="shot" id="shot"></div>
+          <div class="side">
+            <table>
+              <thead><tr><th>점</th><th>이미지</th><th>X (m)</th><th>Y (m)</th></tr></thead>
+              <tbody id="point-rows"></tbody>
+            </table>
+            <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap">
+              <button class="primary" id="save-calib">보정 저장</button>
+              <button id="reset-points">점 다시 찍기</button>
+              <button class="danger" id="clear-calib">보정 삭제</button>
+              <button id="reload-shot">스냅샷 새로</button>
+            </div>
+            <div class="msg" id="calib-msg"></div>
+            <label style="margin-top:12px">
+              <span>메모</span>
+              <input id="camera-note" placeholder="예: A동 1번 통로. 기준 사각형은 바닥 표시선" />
+              <em>저장은 아래 '메모·사용 저장' 을 누르세요.</em>
+            </label>
+            <div style="display:flex; gap:8px; flex-wrap:wrap">
+              <button id="save-note">메모·사용 저장</button>
+              <button id="toggle-enabled">판정 끄기</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>최근 판정</h2>
+        <p class="desc">
+          이 모듈이 내보낸 전이와 확정입니다. 플랫폼에 쌓이는 이벤트와 별개로,
+          여기서는 해제된 것까지 시간순으로 봅니다.
+        </p>
+        <div class="feed">
+          <table>
+            <thead><tr><th>시각</th><th>카메라</th><th>판정</th><th>내용</th></tr></thead>
+            <tbody id="feed-rows"></tbody>
+          </table>
+        </div>
+        <div class="evidence" id="evidence"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
