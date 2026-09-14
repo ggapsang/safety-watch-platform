@@ -570,7 +570,7 @@ async function saveOverlay() {
     await api("/api/overlay", json("PUT", {
       publish_live: $("pub-live").checked, zones: $("pub-zones").checked }));
     msg("overlay-msg", $("pub-live").checked
-      ? "종합 현황으로 내보냅니다. 같은 카메라에 다른 모듈도 라이브를 내면 두 그림이 번갈아 보입니다."
+      ? "종합 현황으로 내보냅니다. 우리가 만든 구역만 나가므로 다른 모듈의 박스와 겹치지 않습니다."
       : "내보내기를 껐습니다. 이 화면에서는 계속 보입니다.", "ok");
     refresh();
   } catch (e) { msg("overlay-msg", e.message, "err"); }

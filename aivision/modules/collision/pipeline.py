@@ -361,25 +361,33 @@ class CameraPipeline:
         return self._overlay
 
     def _emit_live(self, now: float) -> None:
-        """선택 — 화면용 오버레이를 브로커로도 낸다. 쌓이지 않는다(계약 1.3).
+        """선택 — 우리가 만든 그림(위험구역·도달범위)을 브로커로도 낸다. 쌓이지 않는다.
 
-        박스는 계약 그대로(0~1 정규화·사람이 읽을 라벨)라 코어 대시보드가 오늘 그대로
-        그린다. 다각형은 `shapes` 라는 **확장 필드**로 함께 싣는다 — 코어는 모르는 키를
-        무시하고, 원근이 살아 있는 그림이 필요한 쪽만 읽으면 된다. 계약을 바꾸지 않고
-        나중을 열어 두는 자리다.
+        **사람·AMR 박스는 싣지 않는다.** 그것은 남(객체감지·카메라 메타데이터)이 이미
+        낸 것이고, 코어는 발행자별로 나눠 들고 있다가 합쳐 그린다 — 되실으면 같은 물체
+        위에 사각형이 두 번 그려진다. 계약 문서의 '자기가 만든 것만 내십시오' 다.
+
+        예전에는 상위집합을 냈다. 그때 코어가 카메라 단위로 박스를 통째로 갈아 끼워서,
+        두 발행자의 그림이 번갈아 깜빡였기 때문이다. 코어가 고쳐졌으므로(module_id 로
+        레이어를 나눈다) 그 회피책은 이제 해롭다.
+
+        다각형은 `shapes` 라는 **확장 필드**로 함께 싣는다 — 코어는 모르는 키를 무시하고,
+        원근이 살아 있는 그림이 필요한 쪽만 읽으면 된다.
+
+        모듈 자기 화면은 영향받지 않는다. 그쪽은 `overlay()` 로 사람·AMR 까지 한 벌을
+        그대로 받는다 — 자기 화면에서 보는 것과 남에게 보내는 것은 다른 결정이다.
         """
-        if not self.cfg.publish_live:
+        if not self.cfg.publish_live or not self.cfg.overlay_zones:
+            # 구역을 안 그릴 거면 낼 것이 없다. 빈 배열을 계속 내보내도 화면에 남는
+            # 것은 없고 브로커만 시끄러워진다.
             return
         if now - self._last_live < self.cfg.live_min_interval:
             return
         self._last_live = now
 
-        boxes = list(self._overlay["boxes"])
         payload = {"camera_id": self.camera_id, "module_id": self.cfg.module_id,
-                   "ts": now_iso(), "boxes": boxes}
-        if self.cfg.overlay_zones:
-            boxes.extend(self._overlay["zone_boxes"])
-            payload["shapes"] = self._overlay["zones"]
+                   "ts": now_iso(), "boxes": list(self._overlay["zone_boxes"]),
+                   "shapes": self._overlay["zones"]}
         self.pub.publish(LIVE_TOPIC.format(camera_id=self.camera_id), payload)
         self.published += 1
 

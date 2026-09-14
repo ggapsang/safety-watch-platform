@@ -205,10 +205,9 @@ def create_app(cfg: config_module.Config, service) -> FastAPI:
     async def set_overlay(body: OverlayIn) -> JSONResponse:
         """그림을 브로커로도 낼지(종합 현황에 보이게 할지).
 
-        기본은 끔이다. 켜면 코어 대시보드에 이 모듈의 박스와 구역이 그려지는데,
-        코어는 카메라별로 **마지막 라이브 메시지만** 그린다 — 같은 카메라에 객체감지
-        모듈도 라이브를 내고 있으면 두 그림이 번갈아 보인다. 그때는 그쪽 라이브를 끄는
-        편이 낫다(이 모듈의 그림이 원본 박스까지 포함한 상위집합이다).
+        기본은 끔이다. 켜면 코어 대시보드에 이 모듈이 만든 **위험구역과 도달범위**가
+        그려진다. 사람·AMR 박스는 내지 않는다 — 그것은 객체감지·카메라 메타데이터가
+        이미 내고 있고, 코어가 발행자별로 합쳐 그리므로 되실으면 두 번 그려진다.
         """
         s = service.settings
         if body.publish_live is not None:

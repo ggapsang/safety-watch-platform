@@ -766,8 +766,20 @@ def test_overlay_channel() -> None:
               "라이브 payload 의 발행자·카메라")
         labels = {b["label"] for b in last["boxes"]}
         check(any("위험구역" in x for x in labels), "라이브 박스에 구역이 실린다")
-        check(any("사람" in x or "Human" in x for x in labels), "원본 트랙 박스도 함께")
+        # 계약 2장 — 자기가 만든 것만 낸다. 사람·AMR 은 남이 이미 내고 있고, 코어가
+        # 발행자별로 합쳐 그리므로 되실으면 같은 물체 위에 사각형이 두 번 그려진다.
+        #
+        # 라벨만으로 가리지 않는다 — 구역 이름에도 대상이 들어간다('위험구역 AMR#2').
+        # 나간 박스가 구역 박스와 정확히 같은 묶음인지로 본다.
+        check(len(last["boxes"]) == len(over["zone_boxes"]),
+              f"구역 박스만 나간다 (나간 {len(last['boxes'])} · 구역 {len(over['zone_boxes'])})")
+        track_labels = {b["label"] for b in over["boxes"]}
+        check(not (labels & track_labels), "남의 탐지(사람·AMR) 박스는 싣지 않는다")
         check("shapes" in last and last["shapes"], "확장 필드 shapes 가 함께 실린다")
+
+        # 자기 화면은 영향받지 않는다 — 거기서는 사람·AMR 까지 한 벌을 그린다
+        check(any(t["kind"] == tracking.PERSON for t in over["tracks"]),
+              "모듈 자기 화면은 사람 트랙을 그대로 들고 있다")
 
         # 계약 2장 — 모든 박스가 0~1 이고 라벨이 사람이 읽을 이름이다
         for b in last["boxes"]:
@@ -780,14 +792,13 @@ def test_overlay_channel() -> None:
         check(frame is not None and len(frame.boxes) == len(last["boxes"]),
               "우리 라이브를 parse_frame 이 그대로 읽는다 (shapes 는 무시된다)")
 
-        # 구역을 빼면 원본 박스만 나간다
+        # 구역을 빼면 낼 것이 없다 — 남의 박스를 대신 내보내지 않는다.
+        # 빈 배열을 계속 내보내도 화면에 남는 것은 없고 브로커만 시끄러워진다.
+        before = len(pub.live_raw)
         cfg.overlay_zones = False
         pipe.configure(cfg, setup_of())
         pipe.tick(4.2)
-        plain = pub.live_raw[-1][1]
-        check(not any("위험구역" in b["label"] for b in plain["boxes"]),
-              "구역을 끄면 라이브에서 빠진다")
-        check("shapes" not in plain, "구역을 끄면 확장 필드도 없다")
+        check(len(pub.live_raw) == before, "구역을 끄면 라이브를 아예 내지 않는다")
         check(pipe.overlay()["zones"], "그래도 모듈 화면용 그림에는 남아 있다")
 
 
