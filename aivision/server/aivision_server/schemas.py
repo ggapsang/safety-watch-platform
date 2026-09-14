@@ -456,6 +456,12 @@ class SettingsOut(BaseModel):
     record_max_gb: float
     # 같은 메시지를 이 간격 안에서는 한 번만 처리한다. 0 이면 끔.
     inbound_min_interval_sec: float
+    # 라이브 박스 색. 탐지 객체 이름 -> #rrggbb.
+    #
+    # 여기 없는 이름도 화면은 색을 줍니다 — 이름을 해싱해 고정 팔레트에서 고릅니다.
+    # 그러니 이 표는 '자동으로 고른 색이 마음에 안 들 때' 덮어쓰는 자리입니다.
+    # 비워 두어도 현장은 돌아갑니다.
+    box_colors: dict[str, str]
 
 
 class SettingsPatch(BaseModel):
@@ -466,3 +472,4 @@ class SettingsPatch(BaseModel):
     event_dedup_sec: float | None = None
     record_max_gb: float | None = None
     inbound_min_interval_sec: float | None = None
+    box_colors: dict[str, str] | None = None

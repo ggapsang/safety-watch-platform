@@ -9,7 +9,7 @@
  * 주의: 로그인이 없다. 폐쇄망 전제다. 외부 접근이 가능한 망에 올릴 때는 이 화면부터 막아야 한다.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import {
@@ -32,7 +32,8 @@ import {
 } from "../components/ui";
 import { api, ApiError } from "../lib/api";
 import { fmtAgo, fmtBytes, fmtHours } from "../lib/format";
-import { useCameras, useSettings, useSystem } from "../lib/hooks";
+import { boxColor, colorKey } from "../lib/boxcolor";
+import { useCameras, useLiveBoxes, useSettings, useSystem } from "../lib/hooks";
 import { BindingAdmin } from "./BindingAdmin";
 import { OutboundAdmin } from "./OutboundAdmin";
 import type { AppSettings, Camera, CameraInput, CameraTestResult } from "../lib/types";
@@ -654,6 +655,8 @@ function SettingsAdmin() {
           </div>
         </Card>
 
+        <BoxColors />
+
         <Card>
           <CardTitle title="탐지 항목" desc="무엇을 이벤트로 볼지 정하는 곳입니다." />
           <p className="text-[13px] leading-relaxed text-muted">
@@ -669,6 +672,138 @@ function SettingsAdmin() {
         </Card>
       </div>
     </Section>
+  );
+}
+
+/* ═══════════════════════════════════════════════════ 라이브 박스 색 */
+
+/**
+ * 탐지 객체별 박스 색.
+ *
+ * **적지 않아도 색은 나옵니다.** 화면이 이름을 해싱해 고정 팔레트에서 고르므로, 새
+ * 플러그인이 새 이름을 들고 와도 알아서 서로 다른 색이 붙습니다. 이 표는 그렇게 고른
+ * 색이 마음에 안 들 때 덮어쓰는 자리입니다 — 그래서 비어 있는 것이 정상입니다.
+ *
+ * 이름은 지금 화면에 실제로 흐르고 있는 것에서 뽑아 보여 줍니다. 사람이 철자를 외워
+ * 적게 하면 한 글자만 틀려도 조용히 안 먹습니다.
+ */
+function BoxColors() {
+  const qc = useQueryClient();
+  const { data: settings } = useSettings();
+  const live = useLiveBoxes();
+  const [rows, setRows] = useState<{ name: string; color: string }[]>([]);
+  const [msg, setMsg] = useState("");
+
+  // 지금 흐르는 라벨 — 번호를 뗀 종류만 모은다.
+  const seen = useMemo(() => {
+    const names = new Set<string>();
+    Object.values(live).forEach((boxes) =>
+      boxes.forEach((b) => {
+        const k = colorKey(b.label);
+        if (k) names.add(k);
+      }),
+    );
+    return [...names].sort();
+  }, [live]);
+
+  useEffect(() => {
+    if (!settings) return;
+    setRows(Object.entries(settings.box_colors || {}).map(([name, color]) => ({ name, color })));
+  }, [settings]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.saveSettings({
+        box_colors: Object.fromEntries(
+          rows.filter((r) => r.name.trim()).map((r) => [r.name.trim(), r.color]),
+        ),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      setMsg("저장했습니다.");
+      window.setTimeout(() => setMsg(""), 2500);
+    },
+  });
+
+  const add = (name: string) =>
+    setRows((prev) =>
+      prev.some((r) => r.name === name)
+        ? prev
+        : [...prev, { name, color: boxColor(name, {}) }],
+    );
+
+  return (
+    <Card>
+      <CardTitle
+        title="라이브 박스 색"
+        desc="탐지 객체마다 다른 색으로 그립니다. 적지 않으면 이름에 따라 자동으로 정해집니다."
+      />
+      <div className="grid gap-3">
+        {rows.length === 0 && (
+          <p className="text-[12.5px] text-muted">
+            덮어쓴 색이 없습니다. 아래에서 이름을 눌러 추가하세요.
+          </p>
+        )}
+        {rows.map((r, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              type="color"
+              value={r.color}
+              onChange={(e) =>
+                setRows((prev) =>
+                  prev.map((x, j) => (j === i ? { ...x, color: e.target.value } : x)),
+                )
+              }
+              className="h-8 w-10 shrink-0 cursor-pointer rounded border border-hairline bg-canvas"
+              aria-label={`${r.name} 색`}
+            />
+            <Input
+              value={r.name}
+              placeholder="탐지 객체 이름 (예: 사람)"
+              onChange={(e) =>
+                setRows((prev) =>
+                  prev.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
+                )
+              }
+            />
+            <Button size="sm" onClick={() => setRows((prev) => prev.filter((_, j) => j !== i))}>
+              빼기
+            </Button>
+          </div>
+        ))}
+
+        {seen.length > 0 && (
+          <div className="border-t border-hairline pt-3">
+            <div className="mb-2 text-[11.5px] text-muted-soft">
+              지금 화면에 흐르는 이름 — 누르면 추가됩니다
+            </div>
+            <div className="flex flex-wrap gap-[6px]">
+              {seen.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => add(name)}
+                  className="inline-flex items-center gap-[6px] rounded-full border border-hairline px-[10px] py-[3px] text-[12px] transition-colors hover:border-primary"
+                >
+                  <b
+                    className="h-[9px] w-[9px] rounded-full"
+                    style={{ background: boxColor(name, settings?.box_colors ?? {}) }}
+                  />
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-1">
+          <Button variant="primary" size="sm" disabled={save.isPending} onClick={() => save.mutate()}>
+            색 저장
+          </Button>
+          <span className="text-[12.5px] text-success">{msg}</span>
+        </div>
+      </div>
+    </Card>
   );
 }
 

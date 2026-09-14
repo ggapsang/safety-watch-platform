@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,6 +27,8 @@ from ..services import settings_store as store
 from ..streaming.manager import manager
 
 router = APIRouter(prefix="/api", tags=["admin"])
+
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 # ────────────────────────────────────────────────────────────── 솔루션
@@ -92,6 +95,9 @@ async def get_settings_api(session: AsyncSession = Depends(get_session)) -> Sett
         record_max_gb=float(runtime.get("record_max_gb", s.record_max_gb) or 0),
         inbound_min_interval_sec=float(runtime.get("inbound_min_interval_sec",
                                                    s.inbound_min_interval_sec)),
+        # 코어는 이 이름들이 무엇인지 모른다. 사람이 적어 둔 '이름 -> 색' 표를 그대로
+        # 나를 뿐이다(매니페스토 2번). 비어 있으면 화면이 이름을 해싱해 알아서 고른다.
+        box_colors={str(k): str(v) for k, v in (runtime.get("box_colors") or {}).items()},
     )
 
 
@@ -105,6 +111,17 @@ async def put_settings(body: SettingsPatch,
         raise HTTPException(status_code=400,
                             detail=f"mqtt_log_mode 는 {', '.join(raw_log.VALID_MODES)} "
                                    "중 하나입니다")
+    if "box_colors" in runtime:
+        # 값이 색인지만 본다. 이름이 무엇인지는 코어가 알 바가 아니다 — 모델 클래스든
+        # 플러그인이 만든 도형 이름이든 사람이 적는 대로 받는다.
+        bad = [f"{k}={v}" for k, v in runtime["box_colors"].items()
+               if not _HEX_COLOR.match(str(v))]
+        if bad:
+            raise HTTPException(status_code=400,
+                                detail=f"색은 #rrggbb 모양이어야 합니다: {', '.join(bad[:5])}")
+        # 빈 이름은 지운다. 표에서 줄을 비운 채 저장하면 들어오는 값이다.
+        runtime["box_colors"] = {str(k).strip(): str(v)
+                                 for k, v in runtime["box_colors"].items() if str(k).strip()}
     if runtime:
         await store.set_value(session, store.KEY_RUNTIME, runtime)
     if {"mqtt_log_mode", "mqtt_log_topics"} & runtime.keys():

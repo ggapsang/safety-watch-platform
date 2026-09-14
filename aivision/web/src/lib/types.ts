@@ -234,6 +234,9 @@ export interface AppSettings {
   inbound_min_interval_sec: number;
   snapshot_on_event: boolean;
   event_dedup_sec: number;
+  /** 라이브 박스 색 덮어쓰기. 탐지 객체 이름 -> #rrggbb.
+   *  비어 있는 것이 정상이다 — 적지 않은 이름은 화면이 해싱해 고른다(lib/boxcolor.ts). */
+  box_colors: Record<string, string>;
 }
 
 /** 분석 모듈. 코어는 모듈이 무엇을 하는지 모른다 — 이름과 살아 있는지, 그리고

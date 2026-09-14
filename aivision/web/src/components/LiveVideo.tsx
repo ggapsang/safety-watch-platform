@@ -24,7 +24,9 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { LABEL_FILL, boxColor } from "../lib/boxcolor";
 import { fmtClock } from "../lib/format";
+import { useSettings } from "../lib/hooks";
 import type { Box, Camera } from "../lib/types";
 import { cx } from "./ui";
 
@@ -50,6 +52,11 @@ export function LiveVideo({
   className,
   fill = false,
 }: Props) {
+  // 색 덮어쓰기 표. 운영 설정은 staleTime 30초라 화면 여럿이 써도 한 번만 받아 온다.
+  // 표가 비어 있어도(대개 비어 있다) 색은 나온다 — 이름을 해싱해 고르기 때문이다.
+  const { data: settings } = useSettings();
+  const colors = settings?.box_colors ?? {};
+
   const [failed, setFailed] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -109,6 +116,7 @@ export function LiveVideo({
               const w = Math.max(0, (b.x2 - b.x1) * size.w);
               const h = Math.max(0, (b.y2 - b.y1) * size.h);
               const font = size.h * 0.028;
+              const color = boxColor(b.label, colors);
               const label = b.score ? `${b.label} ${b.score.toFixed(2)}` : b.label;
               // 라벨이 화면 위로 잘리면 박스 안쪽으로 내린다.
               const labelY = y > font * 1.3 ? y - font * 0.4 : y + font * 1.1;
@@ -120,7 +128,7 @@ export function LiveVideo({
                     width={w}
                     height={h}
                     fill="none"
-                    stroke="#e8703a"
+                    stroke={color}
                     // non-scaling-stroke 이므로 이 값은 '화면 픽셀'이다.
                     // user unit 으로 착각해 소수를 넣으면 선이 사라진다.
                     strokeWidth={2}
@@ -130,7 +138,7 @@ export function LiveVideo({
                     <text
                       x={x}
                       y={labelY}
-                      fill="#ffd9c9"
+                      fill={LABEL_FILL}
                       fontSize={font}
                       fontWeight={600}
                       stroke="rgba(0,0,0,.55)"
