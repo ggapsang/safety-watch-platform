@@ -44,6 +44,10 @@ async def ingest_signal(session: AsyncSession, signal: DetectionSignal) -> Event
     if signal.live_only:
         await bus.publish("live-boxes", {
             "camera_id": signal.camera_id,
+            # 누가 낸 것인지. 한 카메라를 여러 플러그인이 함께 볼 수 있고, 화면은
+            # 발행자별로 나눠 들고 있다가 합쳐 그린다. 이것이 없으면 나중에 온 것이
+            # 먼저 온 것을 지워 두 그림이 번갈아 깜빡인다.
+            "module_id": signal.module_id,
             "item": signal.solution_code,
             "ts": signal.ts.isoformat(),
             "boxes": [{"x1": b.x1, "y1": b.y1, "x2": b.x2, "y2": b.y2,

@@ -306,7 +306,10 @@ export type PushMessage =
   | { kind: "cameras-changed"; data: Record<string, never> }
   | {
       kind: "live-boxes";
-      data: { camera_id: number; item: string; ts: string; boxes: Box[] };
+      // module_id 는 누가 낸 그림인지다. 한 카메라를 여러 플러그인이 함께 볼 수 있어
+      // 화면이 발행자별로 나눠 들고 있다가 합쳐 그린다(useLiveBoxes).
+      // 옛 발행자나 판정 주체 표현식이 없는 바인딩에서는 비어 올 수 있다.
+      data: { camera_id: number; module_id?: string; item: string; ts: string; boxes: Box[] };
     };
 
 /** 설정 파일(deploy/config/platform.json)의 내용.
