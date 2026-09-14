@@ -68,7 +68,7 @@ class OverlayIn(BaseModel):
 
 
 def create_app(cfg: config_module.Config, service) -> FastAPI:
-    app = FastAPI(title="AI Safety Watch — 충돌 위험 모듈", docs_url="/api/docs",
+    app = FastAPI(title="AI Safety Watcher — 충돌 위험 모듈", docs_url="/api/docs",
                   openapi_url="/api/openapi.json")
     config_dir = Path(cfg.config_dir)
 

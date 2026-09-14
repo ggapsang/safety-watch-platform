@@ -67,7 +67,7 @@ def create_app(cfg, runner_status: Callable[[], dict],
                reload_workers: Callable[[], None]) -> FastAPI:
     """`runner_status` 는 추론 워커 상태(SDK Runner.status), `reload_workers` 는
     설정을 바꾼 뒤 워커를 새 설정으로 다시 띄우는 함수다."""
-    app = FastAPI(title="AI Safety Watch — 객체감지 모듈", docs_url="/api/docs",
+    app = FastAPI(title="AI Safety Watcher — 객체감지 모듈", docs_url="/api/docs",
                   openapi_url="/api/openapi.json")
 
     models_dir = Path(cfg.models_dir)

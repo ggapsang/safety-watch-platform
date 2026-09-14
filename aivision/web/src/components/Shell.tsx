@@ -1,6 +1,6 @@
 /** 앱 껍데기 — 좌측 내비게이션 + 상단 바.
  *
- * 좌상단은 DAIM 로고, 그 아래에 서비스명(AI Safety Watch Platform)이 온다.
+ * 좌상단은 DAIM 로고, 그 아래에 서비스명(AI Safety Watcher)이 온다.
  * 내비게이션은 '관제 / 분석 / 운영' 세 묶음이다.
  */
 import type { ReactNode } from "react";
@@ -110,7 +110,7 @@ export function Shell({ live, children }: { live: LiveState; children: ReactNode
             * 브랜드를 굵게, 한글 설명을 얇게 나눴는데 지금은 Platform 까지가 이름이라
             * 그 분리가 뜻을 왜곡한다. */}
           <div className="mt-[14px] text-center text-[15px] font-semibold tracking-[-.01em] text-ink">
-            AI Safety Watch Platform
+            AI Safety Watcher
           </div>
         </div>
 
