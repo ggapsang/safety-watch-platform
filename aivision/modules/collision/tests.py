@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import tempfile
 import time
@@ -31,6 +32,7 @@ import geometry                                                   # noqa: E402
 import judge                                                      # noqa: E402
 import settings as settings_module                                # noqa: E402
 import tracking                                                   # noqa: E402
+import zones                                                      # noqa: E402
 from _sdk import Frame                                            # noqa: E402
 from pipeline import CameraPipeline                               # noqa: E402
 from tracking import AMR, PERSON, Kalman2D, Track                 # noqa: E402
@@ -306,15 +308,25 @@ def test_collision() -> None:
 # ────────────────────────────────────────────────── 6. 전이 발행
 
 class FakePublisher:
+    """발행된 것을 토픽째 적어 둔다. 무엇을 어느 토픽으로 냈는지가 계약의 절반이다."""
+
     def __init__(self) -> None:
-        self.detect: list[tuple[str, dict]] = []
-        self.live: list[tuple[int, list]] = []
+        self.sent: list[tuple[str, dict]] = []
+        self.cleared: list[tuple[int, list]] = []      # publish_live() (화면 비우기)
 
     def publish(self, topic: str, payload: dict, qos: int = 0) -> None:
-        self.detect.append((topic, payload))
+        self.sent.append((topic, payload))
 
     def publish_live(self, module_id: str, camera_id: int, boxes: list) -> None:
-        self.live.append((camera_id, boxes))
+        self.cleared.append((camera_id, boxes))
+
+    @property
+    def detect(self) -> list[tuple[str, dict]]:
+        return [(t, p) for t, p in self.sent if t.startswith("aivision/detect/")]
+
+    @property
+    def live_raw(self) -> list[tuple[str, dict]]:
+        return [(t, p) for t, p in self.sent if t.startswith("aivision/live/")]
 
 
 def make_cfg(tmp: str) -> config_module.Config:
@@ -500,12 +512,11 @@ def test_live_roundtrip() -> None:
                                     box_at(3.0, 5.0, w=0.1, h=0.08,
                                            label="자율주행로봇")], received=t))
             pipe.tick(t)
-    check(pub.live, "라이브 오버레이가 나간다")
-    _, boxes = pub.live[-1]
+    check(pub.live_raw, "라이브 오버레이가 나간다")
+    _, payload = pub.live_raw[-1]
     frame = parse_frame("aivision/live/4",
-                        json.dumps({"camera_id": 4, "module_id": "collision",
-                                    "ts": "", "boxes": boxes}).encode())
-    check(frame is not None and len(frame.boxes) == len(boxes),
+                        json.dumps(payload, ensure_ascii=False).encode())
+    check(frame is not None and len(frame.boxes) == len(payload["boxes"]),
           "우리 라이브 박스를 parse_frame 이 그대로 읽는다")
 
 
@@ -593,6 +604,193 @@ def test_settings_seeding() -> None:
         check(cleared.capabilities == [], "일부러 비운 항목은 env 로 되살아나지 않는다")
 
 
+def test_zone_geometry() -> None:
+    """그림이 판정의 설명인가.
+
+    구역을 판정과 다른 숫자로 그리면, 사람은 구역 밖에 선 사람에게 울리는 알람을 보게
+    되고 그 화면은 아무도 믿지 않는다. 그래서 '그린 사각형 안 = 주의' 를 못 박는다.
+    """
+    print("구역 기하")
+    tun = settings_module.Thresholds()
+    pairs = [((u, v), (x, y)) for u, v, x, y in CALIB]
+    H = geometry.homography_from_points(pairs)
+    H_inv = geometry.invert(H)
+    check(H_inv is not None, "H⁻¹ 가 나온다")
+
+    # 이미지 -> 월드 -> 이미지 왕복
+    u, v = 0.42, 0.61
+    x, y = geometry.project(H, u, v)
+    back = geometry.to_image(H_inv, x, y)
+    check(back is not None and abs(back[0] - u) < 1e-6 and abs(back[1] - v) < 1e-6,
+          "이미지→월드→이미지 왕복이 제자리로 온다")
+
+    amr = make_track(AMR, 1, (2.0, 5.0), (1.0, 0.0))
+    heading, half_w, length, back_m = judge.corridor_of(amr, tun)
+    quad = geometry.corridor_quad(amr.pos, heading, half_w, length, back_m)
+    check(len(quad) == 4, "통로 네 꼭짓점")
+
+    # 그린 사각형의 한가운데에 선 사람은 판정도 위험이어야 한다
+    mid = (sum(p[0] for p in quad) / 4.0, sum(p[1] for p in quad) / 4.0)
+    inside_person = make_track(PERSON, 2, mid, (0.0, 0.0))
+    check(judge.assess([inside_person], [amr], tun)[0].level != "",
+          "그린 통로 한가운데는 판정도 위험이다")
+
+    # 통로 옆으로 반폭보다 더 벗어나면(그림 밖) 판정도 통로 밖이다
+    outside = (mid[0], mid[1] + half_w + tun.v_h_max * tun.t_imminent + 1.0)
+    out_person = make_track(PERSON, 3, outside, (0.0, 0.0))
+    check(judge.assess([out_person], [amr], tun)[0].level == "",
+          "그린 통로 밖(옆)은 판정도 위험이 아니다")
+
+    # 사람 도달범위는 R_h(τ) 그대로여야 한다
+    radius = judge.reach_radius(tun)
+    expect = tun.r_h + tun.sigma + tun.v_h_max * tun.t_imminent
+    check(abs(radius - expect) < 1e-9, "도달 반경 = r_h + σ + v_h,max·τ")
+
+    circle = geometry.circle_points((5.0, 5.0), radius, steps=12)
+    check(len(circle) == 12 and abs(math.hypot(circle[0][0] - 5.0,
+                                               circle[0][1] - 5.0) - radius) < 1e-9,
+          "원을 다각형으로 쪼갠다 (원근을 지나면 타원이 된다)")
+
+    # 화면 밖으로 뻗은 구역도 계약 박스는 0~1 안에 있어야 한다
+    far = geometry.project_polygon(H_inv, geometry.corridor_quad(
+        (9.5, 5.0), (1.0, 0.0), 1.0, 50.0), (9.5, 5.0))
+    box = geometry.bounding_box(far)
+    check(box is None or all(0.0 <= c <= 1.0 for c in box),
+          "화면을 넘어가는 구역도 박스는 0~1 로 잘린다")
+
+    # 카메라 뒤로 넘어간 점은 버린다.
+    #
+    # 먼 점이 아니라 **분모의 부호가 뒤집히는 선 너머**가 문제다. 멀기만 한 점은 화면
+    # 밖으로 나갈 뿐 부호가 그대로라 잘라 쓰면 되지만, 부호가 뒤집힌 점을 그대로 그리면
+    # 구역이 화면 반대편으로 접혀 엉뚱한 사각형이 된다. 그 선을 직접 계산해 시험한다.
+    tilted = [((0.10, 0.95), (0.0, 0.0)), ((0.90, 0.95), (4.0, 0.0)),
+              ((0.62, 0.40), (4.0, 10.0)), ((0.38, 0.40), (0.0, 10.0))]
+    H2_inv = geometry.invert(geometry.homography_from_points(tilted))
+    h31, h32, h33 = H2_inv[2]
+    check(abs(h32) > 1e-9, "이 보정에는 부호가 뒤집히는 선이 있다")
+    y0 = -(h31 * 2.0 + h33) / h32                  # (2, y0) 에서 분모가 0 이다
+    near = geometry.to_image(H2_inv, 2.0, y0 - 1.0)
+    far = geometry.to_image(H2_inv, 2.0, y0 + 1.0)
+    check(near is not None and far is not None and near[2] * far[2] < 0,
+          "선을 사이에 두고 분모 부호가 갈린다")
+    # 선을 가로지르는 가느다란 사각형 — 두 꼭짓점만 반대편에 있다.
+    quad = [(2.0, y0 - 1.0), (2.05, y0 - 1.0), (2.05, y0 + 1.0), (2.0, y0 + 1.0)]
+    anchor_w = geometry.to_image(H2_inv, 2.0, 1.0)[2]
+    same_side = sum(1 for x, y in quad
+                    if geometry.to_image(H2_inv, x, y)[2] * anchor_w > 0)
+    check(same_side == 2, "네 꼭짓점 중 둘만 카메라 앞쪽이다")
+    folded = geometry.project_polygon(H2_inv, quad, (2.0, 1.0))
+    check(folded == [], f"뒤로 접히는 꼭짓점을 버리면 그릴 수 없다 (남은 점 {len(folded)})")
+
+
+def test_zone_build() -> None:
+    print("구역 만들기")
+    tun = settings_module.Thresholds()
+    H_inv = geometry.invert(geometry.homography_from_points(
+        [((u, v), (x, y)) for u, v, x, y in CALIB]))
+
+    amr = make_track(AMR, 1, (2.0, 5.0), (1.0, 0.0))
+    person = make_track(PERSON, 2, (5.0, 5.0), (0.0, 0.0))
+    pairs = judge.assess([person], [amr], tun)
+    built = zones.build([person], [amr], pairs, tun, H_inv)
+
+    kinds = {z.kind for z in built}
+    check(kinds == {zones.CORRIDOR, zones.REACH}, "통로와 도달범위가 둘 다 나온다")
+
+    corridor = next(z for z in built if z.kind == zones.CORRIDOR)
+    reach = next(z for z in built if z.kind == zones.REACH)
+    check(corridor.level == pairs[0].level, "구역 색(level)이 판정과 같다")
+    check(corridor.world["length_m"] > 0 and reach.world["radius_m"] > 0,
+          "미터 단위 원본이 함께 실린다")
+
+    # 계약 2장 — 구역 박스도 박스다
+    box = corridor.box()
+    check(all(0.0 <= box[k] <= 1.0 for k in ("x1", "y1", "x2", "y2")),
+          "구역 박스 좌표가 0~1")
+    check(box["x1"] < box["x2"] and box["y1"] < box["y2"], "x1<x2, y1<y2")
+    check("위험구역" in box["label"] and "AMR#1" in box["label"],
+          f"라벨이 사람이 읽을 이름 ({box['label']})")
+    check("score" not in box, "구역에는 점수를 붙이지 않는다 (탐지가 아니라 설명이다)")
+    check("도달범위" in reach.box()["label"], "도달범위 라벨")
+
+    shape = corridor.shape()
+    check(len(shape["points"]) >= 3 and all(len(p) == 2 for p in shape["points"]),
+          "확장 필드에는 다각형이 그대로 들어간다")
+
+    # 한 번도 움직인 적 없는 AMR 은 방향을 모른다 — 통로를 그리지 않는다
+    still = make_track(AMR, 3, (5.0, 2.0), (0.0, 0.0))
+    still.heading = (0.0, 0.0)
+    check(zones.corridor_zone(still, tun, H_inv, "") is None,
+          "방향을 모르는 AMR 의 통로는 그리지 않는다")
+
+    # 미보정이면 그릴 수 없다
+    check(zones.build([person], [amr], pairs, tun, None) == [],
+          "보정이 없으면 구역도 없다")
+
+
+def test_overlay_channel() -> None:
+    """화면과 종합 현황이 **같은 그림**을 보는가. 그리고 그 그림이 계약을 지키는가."""
+    print("오버레이 인터페이스")
+    import json
+
+    from _sdk import parse_frame
+
+    pub = FakePublisher()
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = make_cfg(tmp)
+        cfg.publish_live = True
+        cfg.live_min_interval = 0.0
+        pipe = CameraPipeline(1, cfg, pub, setup_of())
+        for i in range(20):
+            t = i * 0.2
+            x = 1.0 + 0.8 * t
+            pipe.offer(Frame(camera_id=1, module_id="yolo-server", ts="",
+                             boxes=[box_at(6.0, 5.0, label="Human"),
+                                    box_at(x, 5.0, w=0.10, h=0.08,
+                                           label="자율주행로봇")], received=t))
+            pipe.tick(t)
+
+        over = pipe.overlay()
+        check(over["calibrated"] is True, "오버레이가 보정 상태를 알려 준다")
+        check(len(over["tracks"]) == 2, "트랙 둘(사람·AMR)")
+        check({z["kind"] for z in over["zones"]} == {"corridor", "reach"},
+              "구역 둘이 그림에 들어 있다")
+        check(len(over["zone_boxes"]) == len(over["zones"]),
+              "구역마다 계약 박스가 하나씩")
+
+        # 브로커로 나간 라이브가 화면과 같은 내용인가
+        check(bool(pub.live_raw), "라이브가 발행되었다")
+        topic, last = pub.live_raw[-1]
+        check(topic == "aivision/live/1", f"라이브 토픽 모양 ({topic})")
+        check(last["module_id"] == "collision" and last["camera_id"] == 1,
+              "라이브 payload 의 발행자·카메라")
+        labels = {b["label"] for b in last["boxes"]}
+        check(any("위험구역" in x for x in labels), "라이브 박스에 구역이 실린다")
+        check(any("사람" in x or "Human" in x for x in labels), "원본 트랙 박스도 함께")
+        check("shapes" in last and last["shapes"], "확장 필드 shapes 가 함께 실린다")
+
+        # 계약 2장 — 모든 박스가 0~1 이고 라벨이 사람이 읽을 이름이다
+        for b in last["boxes"]:
+            check(all(0.0 <= b[k] <= 1.0 for k in ("x1", "y1", "x2", "y2")),
+                  f"라이브 박스 0~1 ({b['label']})")
+
+        # 남이 받아 쓸 수 있어야 한다 — SDK 의 parse_frame 이 그대로 읽는가
+        frame = parse_frame("aivision/live/1",
+                            json.dumps(last, ensure_ascii=False).encode())
+        check(frame is not None and len(frame.boxes) == len(last["boxes"]),
+              "우리 라이브를 parse_frame 이 그대로 읽는다 (shapes 는 무시된다)")
+
+        # 구역을 빼면 원본 박스만 나간다
+        cfg.overlay_zones = False
+        pipe.configure(cfg, setup_of())
+        pipe.tick(4.2)
+        plain = pub.live_raw[-1][1]
+        check(not any("위험구역" in b["label"] for b in plain["boxes"]),
+              "구역을 끄면 라이브에서 빠진다")
+        check("shapes" not in plain, "구역을 끄면 확장 필드도 없다")
+        check(pipe.overlay()["zones"], "그래도 모듈 화면용 그림에는 남아 있다")
+
+
 def test_config_env_and_file() -> None:
     """env 는 '처음 값', 파일은 '사람이 고친 값' 이고 파일이 이긴다."""
     print("설정 우선순위")
@@ -629,6 +827,7 @@ def main() -> int:
     for fn in (test_homography, test_sweep_and_corridor, test_tracking, test_risk,
                test_collision, test_transitions, test_uncalibrated_and_disabled,
                test_garbage_input, test_platform_contract, test_live_roundtrip,
+               test_zone_geometry, test_zone_build, test_overlay_channel,
                test_settings_store, test_settings_seeding, test_config_env_and_file):
         fn()
     print(f"\n검증 {CHECKS}개 통과 ({time.strftime('%H:%M:%S')})")

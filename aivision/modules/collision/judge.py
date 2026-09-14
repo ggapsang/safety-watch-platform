@@ -86,9 +86,8 @@ def pair_of(person: Track, amr: Track, tun: Thresholds) -> Pair:
     closing = -((dp[0] * dv[0] + dp[1] * dv[1]) / dist) if dist > 1e-9 else 0.0
     t_cpa, d_cpa = geometry.closest_approach(dp, dv)
 
-    heading = amr.heading if math.hypot(*amr.heading) > 1e-9 else amr.vel
     _, ahead, lateral = geometry.corridor_hit(
-        amr.pos, heading, person.pos, tun.corridor_half_w, 0.0)
+        amr.pos, heading_of(amr), person.pos, tun.corridor_half_w, 0.0)
     return Pair(person=person, amr=amr, dist=dist, v_rel=v_rel, closing=closing,
                 t_cpa=t_cpa, d_cpa=d_cpa, ahead=ahead, lateral=lateral)
 
@@ -108,6 +107,34 @@ def assess(persons: list[Track], amrs: list[Track], tun: Thresholds) -> list[Pai
     return out
 
 
+def heading_of(amr: Track) -> tuple[float, float]:
+    """AMR 의 진행 방향. 서 있으면 마지막으로 움직이던 쪽을 쓴다."""
+    return amr.heading if math.hypot(*amr.heading) > 1e-9 else amr.vel
+
+
+def corridor_of(amr: Track, tun: Thresholds) -> tuple[tuple[float, float], float,
+                                                      float, float]:
+    """주의 통로의 기하 — (진행 방향, 반폭, 길이, 뒤쪽 여유). 전부 미터.
+
+    **판정과 그림이 이 함수 하나를 같이 쓴다.** 통로를 그리는 쪽이 따로 계산하면
+    언젠가 한쪽만 고쳐지고, 그때 화면은 '구역 밖에 선 사람에게 울리는 알람' 이 된다.
+    """
+    # 통로 길이 = AMR 몸체 + T 초 동안 갈 거리. 서 있어도 최소 길이는 남긴다 —
+    # 스테이션 앞에 잠깐 선 AMR 앞에 서 있는 것은 여전히 주의할 일이다.
+    length = max(tun.corridor_min_len, tun.r_amr + amr.speed * tun.t_warn)
+    return (heading_of(amr), tun.corridor_half_w + tun.r_h, length, tun.r_amr)
+
+
+def reach_radius(tun: Thresholds, tau: float | None = None) -> float:
+    """사람 최악 도달 반경 R_h(τ) = r_h + σ + v_h,max·τ (기획 6장).
+
+    기본은 임박 전망 시간에서의 값이다. 사람이 어느 방향으로든 갈 수 있다고 보는 쪽이
+    이 반경이고, 이것이 임박 판정의 '사람 몫' 이다.
+    """
+    horizon = tun.t_imminent if tau is None else tau
+    return tun.r_h + tun.sigma + tun.v_h_max * horizon
+
+
 def _level(p: Pair, tun: Thresholds) -> tuple[str, float | None]:
     amr = p.amr
     speed = amr.speed
@@ -122,14 +149,10 @@ def _level(p: Pair, tun: Thresholds) -> tuple[str, float | None]:
         if tau is not None:
             return (IMMINENT, tau)
 
-    # 주의 — 사람이 AMR 통로 안에 있는가.
-    heading = amr.heading if math.hypot(*amr.heading) > 1e-9 else amr.vel
-    # 통로 길이 = AMR 몸체 + T 초 동안 갈 거리. 서 있어도 최소 길이는 남긴다 —
-    # 스테이션 앞에 잠깐 선 AMR 앞에 서 있는 것은 여전히 주의할 일이다.
-    length = max(tun.corridor_min_len, tun.r_amr + speed * tun.t_warn)
+    # 주의 — 사람이 AMR 통로 안에 있는가. 그리는 쪽과 같은 기하를 쓴다.
+    heading, half_w, length, back = corridor_of(amr, tun)
     inside, _, _ = geometry.corridor_hit(
-        amr.pos, heading, p.person.pos,
-        half_w=tun.corridor_half_w + tun.r_h, length=length, back=tun.r_amr)
+        amr.pos, heading, p.person.pos, half_w=half_w, length=length, back=back)
     if inside:
         return (WARN, tau)
     return ("", tau)

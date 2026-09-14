@@ -102,6 +102,123 @@ def project(H: np.ndarray, u: float, v: float) -> tuple[float, float] | None:
     return (x, y)
 
 
+def invert(H: np.ndarray | None) -> np.ndarray | None:
+    """H⁻¹ — 바닥 월드 좌표를 다시 이미지로 돌리는 행렬.
+
+    판정은 이미지 → 월드 한 방향이면 되지만, **그림은 반대 방향이 필요하다.** 위험
+    구역은 바닥(미터)에서 정의되고 사람이 보는 것은 카메라 화면이다.
+    """
+    if H is None:
+        return None
+    try:
+        inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        return None
+    if abs(inv[2, 2]) < 1e-12:
+        return None
+    return inv / inv[2, 2]
+
+
+def to_image(H_inv: np.ndarray, x: float, y: float) -> tuple[float, float, float] | None:
+    """월드(미터) -> 정규화 이미지. `(u, v, w)` 를 준다. `w` 는 동차 좌표의 분모다.
+
+    `w` 를 함께 돌려주는 이유: 카메라 **뒤쪽**(수평선 너머)의 바닥 점도 숫자로는 좌표가
+    나온다. 부호가 뒤집힌 채로. 그 점을 그대로 그리면 구역이 화면 반대편으로 접혀
+    엉뚱한 사각형이 된다. 부호를 볼 수 있게 분모를 노출한다.
+    """
+    w = H_inv[2, 0] * x + H_inv[2, 1] * y + H_inv[2, 2]
+    if abs(w) < 1e-9:
+        return None
+    u = (H_inv[0, 0] * x + H_inv[0, 1] * y + H_inv[0, 2]) / w
+    v = (H_inv[1, 0] * x + H_inv[1, 1] * y + H_inv[1, 2]) / w
+    if not (math.isfinite(u) and math.isfinite(v)):
+        return None
+    return (u, v, w)
+
+
+# 투영된 점이 화면 밖으로 얼마나 나가는 것까지 들고 있을지. 구역이 화면을 넘어가는 것은
+# 정상이고(통로는 카메라 시야보다 길다) 그리는 쪽이 잘라 내면 된다. 다만 무한대에
+# 가까운 값을 그대로 넘기면 받는 쪽 SVG 가 깨지므로 여기서 한 번 자른다.
+OUT_OF_FRAME = 2.0
+
+
+def project_polygon(H_inv: np.ndarray, world_pts: list[tuple[float, float]],
+                    anchor: tuple[float, float]) -> list[tuple[float, float]]:
+    """월드 다각형 -> 정규화 이미지 다각형.
+
+    호모그래피는 직선을 직선으로 보내므로 **꼭짓점만 옮기면 된다** — 변을 잘게 나눌
+    필요가 없다(원은 예외라 `circle_points` 로 미리 쪼갠다).
+
+    `anchor` 는 반드시 보이는 점(예: AMR 발밑)이다. 그 점의 분모 부호를 기준으로 삼아
+    부호가 다른 꼭짓점 — 카메라 뒤로 넘어간 점 — 을 버린다. 남은 점이 셋보다 적으면
+    그릴 수 없는 구역이라 빈 목록이다.
+    """
+    base = to_image(H_inv, anchor[0], anchor[1])
+    if base is None:
+        return []
+    sign = 1.0 if base[2] > 0 else -1.0
+
+    out: list[tuple[float, float]] = []
+    for x, y in world_pts:
+        got = to_image(H_inv, x, y)
+        if got is None:
+            continue
+        u, v, w = got
+        if w * sign <= 0:                     # 수평선 너머 — 그리면 화면이 접힌다
+            continue
+        out.append((max(-OUT_OF_FRAME, min(OUT_OF_FRAME, u)),
+                    max(-OUT_OF_FRAME, min(OUT_OF_FRAME, v))))
+    return out if len(out) >= 3 else []
+
+
+def circle_points(center: tuple[float, float], radius: float,
+                  steps: int = 24) -> list[tuple[float, float]]:
+    """바닥 위의 원을 다각형으로. 원은 호모그래피를 지나면 타원이 되므로 쪼개야 한다."""
+    cx, cy = center
+    return [(cx + radius * math.cos(2 * math.pi * i / steps),
+             cy + radius * math.sin(2 * math.pi * i / steps)) for i in range(steps)]
+
+
+def corridor_quad(p_amr: tuple[float, float], heading: tuple[float, float],
+                  half_w: float, length: float,
+                  back: float = 0.0) -> list[tuple[float, float]]:
+    """`corridor_hit` 이 판정에 쓰는 그 직사각형의 네 꼭짓점(월드).
+
+    판정과 그림이 같은 함수에서 나와야 한다. 따로 계산하면 언젠가 한쪽만 고쳐져서,
+    구역 밖에 선 사람에게 알람이 울리는 화면이 된다.
+    """
+    hx, hy = heading
+    norm = math.hypot(hx, hy)
+    if norm < 1e-9:
+        return []
+    hx, hy = hx / norm, hy / norm
+    nx, ny = -hy, hx                                  # 진행 방향의 법선
+    ax, ay = p_amr[0] - hx * back, p_amr[1] - hy * back
+    bx, by = p_amr[0] + hx * length, p_amr[1] + hy * length
+    return [(ax + nx * half_w, ay + ny * half_w),
+            (bx + nx * half_w, by + ny * half_w),
+            (bx - nx * half_w, by - ny * half_w),
+            (ax - nx * half_w, ay - ny * half_w)]
+
+
+def bounding_box(points: list[tuple[float, float]]) -> tuple[float, float,
+                                                             float, float] | None:
+    """다각형 -> 0~1 로 자른 축정렬 사각형.
+
+    계약이 아는 모양은 박스뿐이다(계약 2장). 다각형을 그대로 낼 수는 없으므로, 코어
+    화면에는 이 사각형을 보내고 다각형은 확장 필드로 함께 보낸다.
+    """
+    if not points:
+        return None
+    xs = [max(0.0, min(1.0, p[0])) for p in points]
+    ys = [max(0.0, min(1.0, p[1])) for p in points]
+    x1, x2 = min(xs), max(xs)
+    y1, y2 = min(ys), max(ys)
+    if x2 - x1 < 1e-6 or y2 - y1 < 1e-6:
+        return None                            # 화면 밖으로 밀려 납작해진 구역
+    return (round(x1, 5), round(y1, 5), round(x2, 5), round(y2, 5))
+
+
 def reprojection_error(H: np.ndarray,
                        pairs: list[tuple[tuple[float, float],
                                          tuple[float, float]]]) -> float:

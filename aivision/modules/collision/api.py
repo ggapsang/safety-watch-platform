@@ -20,7 +20,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import (FileResponse, JSONResponse, Response,
+                               StreamingResponse)
 from pydantic import BaseModel
 
 import config as config_module
@@ -59,6 +60,11 @@ class CalibrationIn(BaseModel):
 class CameraIn(BaseModel):
     enabled: bool | None = None
     note: str | None = None
+
+
+class OverlayIn(BaseModel):
+    publish_live: bool | None = None
+    zones: bool | None = None
 
 
 def create_app(cfg: config_module.Config, service) -> FastAPI:
@@ -113,6 +119,7 @@ def create_app(cfg: config_module.Config, service) -> FastAPI:
                 "labels": {"amr": cfg.amr_labels, "person": cfg.person_labels},
                 "sources": cfg.src_modules,
                 "publish_live": cfg.publish_live,
+                "overlay_zones": cfg.overlay_zones,
                 "tick_hz": cfg.tick_hz,
             },
             "service": status,
@@ -157,6 +164,64 @@ def create_app(cfg: config_module.Config, service) -> FastAPI:
         # 캐시하지 않는다. 보정할 때는 '지금 화면' 이어야 한다.
         return Response(content=data, media_type=content_type,
                         headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/cameras/{camera_id}/stream")
+    async def stream(camera_id: int) -> StreamingResponse:
+        """플랫폼 MJPEG 중계. 미리보기 화면이 이 위에 구역을 겹쳐 그린다.
+
+        스냅샷을 주기적으로 새로 받는 방법도 있지만, 위험 구역은 **AMR 이 움직이는
+        동안** 늘었다 줄었다 하는 그림이다. 정지 화면 위에 그리면 그 변화가 안 보인다.
+        """
+        got = service.platform_stream(f"/api/stream/{camera_id}")
+        if got is None:
+            raise HTTPException(status_code=502, detail="스트림을 열지 못했습니다")
+        chunks, content_type = got
+        return StreamingResponse(chunks, media_type=content_type,
+                                 headers={"Cache-Control": "no-store"})
+
+    # ── 그림 (구역 오버레이) ────────────────────────────────────────
+
+    @app.get("/api/overlay/{camera_id}")
+    async def overlay(camera_id: int) -> JSONResponse:
+        """지금 그릴 것 한 벌 — 트랙 박스 · 구역 다각형 · 구역 박스.
+
+        **이 모듈의 화면이 쓰는 창구이자, 남이 쓰라고 열어 둔 창구다.** 브로커로 나가는
+        라이브(`aivision/live`)와 같은 내용이지만 이쪽은 `publish_live` 설정과 무관하게
+        늘 열려 있다 — 자기 화면에서 보는 것과 남에게 보내는 것은 다른 결정이다.
+
+        좌표는 둘 다 0~1 정규화다. `zone_boxes` 는 계약이 아는 축정렬 사각형이고,
+        `zones[].points` 는 원근이 살아 있는 다각형이다.
+        """
+        got = service.overlay(camera_id)
+        if got is None:
+            # 담당이 아닌 카메라다. 404 대신 빈 그림을 준다 — 화면이 '아직 할당 전' 을
+            # 오류로 다루지 않아도 되게.
+            return JSONResponse({"camera_id": camera_id, "assigned": False,
+                                 "calibrated": False, "tracks": [], "boxes": [],
+                                 "zone_boxes": [], "zones": []})
+        return JSONResponse(dict(got, assigned=True))
+
+    @app.put("/api/overlay")
+    async def set_overlay(body: OverlayIn) -> JSONResponse:
+        """그림을 브로커로도 낼지(종합 현황에 보이게 할지).
+
+        기본은 끔이다. 켜면 코어 대시보드에 이 모듈의 박스와 구역이 그려지는데,
+        코어는 카메라별로 **마지막 라이브 메시지만** 그린다 — 같은 카메라에 객체감지
+        모듈도 라이브를 내고 있으면 두 그림이 번갈아 보인다. 그때는 그쪽 라이브를 끄는
+        편이 낫다(이 모듈의 그림이 원본 박스까지 포함한 상위집합이다).
+        """
+        s = service.settings
+        if body.publish_live is not None:
+            s.publish_live = body.publish_live
+        if body.zones is not None:
+            s.overlay_zones = body.zones
+        s.overlay_set = True
+        _commit()
+        log.info("라이브 오버레이: 발행 %s · 구역 %s",
+                 "켬" if cfg.publish_live else "끔",
+                 "포함" if cfg.overlay_zones else "제외")
+        return JSONResponse({"publish_live": cfg.publish_live,
+                             "zones": cfg.overlay_zones})
 
     # ── 라벨·항목 (계약 3장: 코드에 박지 않는다) ────────────────────
 

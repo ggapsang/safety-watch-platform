@@ -163,17 +163,25 @@ class Settings:
     tuning: dict[str, float] = field(default_factory=dict)
     cameras: dict[int, CameraSetup] = field(default_factory=dict)
 
+    # 그림을 브로커로도 낼지(종합 현황에 보이게 할지), 구역을 함께 실을지.
+    # 모듈 자기 화면은 이 값과 무관하게 늘 그린다 — 자기 화면에서 보는 것과 남에게
+    # 보내는 것은 다른 결정이다.
+    publish_live: bool = False
+    overlay_zones: bool = True
+
     # 파일에 그 항목이 **있었는지**. 빈 값과 '아직 정한 적 없음' 은 다른 뜻이다 —
     # 빈 항목 코드는 '이벤트를 만들지 마라' 는 사람의 결정이고, 없는 키는 'env 를 따르라' 다.
     # 이 둘을 뭉개면 화면에서 라벨만 저장해도 항목 연결이 조용히 풀린다.
     labels_set: bool = False
     items_set: bool = False
+    overlay_set: bool = False
 
     def setup(self, camera_id: int) -> CameraSetup:
         return self.cameras.get(int(camera_id)) or CameraSetup()
 
     def adopt(self, *, amr_labels: list[str], person_labels: list[str],
-              risk_item: str, collision_item: str) -> None:
+              risk_item: str, collision_item: str,
+              publish_live: bool = False, overlay_zones: bool = True) -> None:
         """파일에 아직 없는 것을 지금 돌고 있는 값(env 기본)으로 채운다.
 
         그래야 화면에서 무엇 하나를 저장할 때 파일이 **지금 도는 설정 그대로** 쓰인다.
@@ -188,6 +196,10 @@ class Settings:
             self.risk_item = risk_item
             self.collision_item = collision_item
             self.items_set = True
+        if not self.overlay_set:
+            self.publish_live = publish_live
+            self.overlay_zones = overlay_zones
+            self.overlay_set = True
 
     def merged_tuning(self, base: dict[str, float]) -> dict[str, float]:
         """env 기본값 위에 사람이 고친 값을 덮는다."""
@@ -210,6 +222,7 @@ class Settings:
             "version": VERSION,
             "labels": {"amr": self.amr_labels, "person": self.person_labels},
             "items": {"risk": self.risk_item, "collision": self.collision_item},
+            "overlay": {"publish_live": self.publish_live, "zones": self.overlay_zones},
             "tuning": self.tuning,
             "cameras": {str(cid): s.to_dict() for cid, s in sorted(self.cameras.items())},
         }
@@ -238,6 +251,10 @@ def _parse(data: dict) -> Settings:
     s.items_set = "items" in data
     s.risk_item = str(items.get("risk") or "")
     s.collision_item = str(items.get("collision") or "")
+    overlay = data.get("overlay") or {}
+    s.overlay_set = "overlay" in data
+    s.publish_live = bool(overlay.get("publish_live", False))
+    s.overlay_zones = bool(overlay.get("zones", True))
     for name, value in (data.get("tuning") or {}).items():
         cut = clamp(str(name), value)
         if cut is not None:

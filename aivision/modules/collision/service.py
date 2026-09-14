@@ -67,7 +67,8 @@ class Service:
         """
         s = settings_module.load(Path(self.cfg.config_dir))
         s.adopt(amr_labels=self.cfg.amr_labels, person_labels=self.cfg.person_labels,
-                risk_item=self.cfg.risk_item, collision_item=self.cfg.collision_item)
+                risk_item=self.cfg.risk_item, collision_item=self.cfg.collision_item,
+                publish_live=self.cfg.publish_live, overlay_zones=self.cfg.overlay_zones)
         return s
 
     # ── 계약 1: 등록 ────────────────────────────────────────────────
@@ -328,6 +329,46 @@ class Service:
         except Exception as exc:                                      # noqa: BLE001
             log.warning("플랫폼 조회 실패 (%s): %s", url, exc)
             return None
+
+    def overlay(self, camera_id: int) -> dict | None:
+        """카메라 한 대의 그림 한 벌. 화면이 초당 몇 번 부른다.
+
+        판정 스레드가 굳혀 둔 것을 그대로 돌려준다 — 여기서 계산하지 않는다.
+        """
+        pipe = self.pipelines.get(int(camera_id))
+        return None if pipe is None else pipe.overlay()
+
+    def platform_stream(self, path: str):
+        """플랫폼 MJPEG 를 그대로 흘려보낸다(중계).
+
+        화면이 플랫폼에 직접 붙지 못하기 때문이다(오리진이 다르다). 여기서 중계하면
+        모듈 화면은 자기 주소만 알면 되고, 그 위에 구역을 겹쳐 그릴 수 있다.
+
+        제너레이터를 돌려준다 — 통째로 읽어 두면 스트림이 스트림이 아니게 된다.
+        """
+        url = f"{self.cfg.platform_url}{path}"
+        try:
+            resp = urllib.request.urlopen(url, timeout=10)             # noqa: S310
+        except Exception as exc:                                       # noqa: BLE001
+            log.warning("플랫폼 스트림을 열지 못했습니다 (%s): %s", url, exc)
+            return None
+
+        content_type = resp.headers.get("Content-Type", "multipart/x-mixed-replace")
+
+        def chunks():
+            try:
+                while True:
+                    data = resp.read(16384)
+                    if not data:
+                        break
+                    yield data
+            except (OSError, ValueError):
+                # 브라우저가 창을 닫으면 여기서 끊긴다. 정상이다.
+                log.debug("스트림 중계 종료", exc_info=True)
+            finally:
+                resp.close()
+
+        return (chunks(), content_type)
 
     def platform_bytes(self, path: str) -> tuple[bytes, str] | None:
         """스냅샷처럼 JSON 이 아닌 것. 보정 화면이 쓴다."""

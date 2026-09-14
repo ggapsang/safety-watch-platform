@@ -122,6 +122,31 @@
   }
   .shots { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
   .shots > .side { flex: 1 1 240px; min-width: 240px; }
+  /* 미리보기 — 영상 위에 구역을 겹쳐 그린다.
+     SVG 는 viewBox "0 0 1 1" 에 preserveAspectRatio="none" 이다. 받은 좌표가 0~1
+     정규화라 그대로 넣으면 되고, 늘어난 비율 때문에 선 굵기가 일그러지는 것은
+     non-scaling-stroke 가 막는다. 글자는 SVG 밖(HTML)에 올린다 — 늘어난 좌표계
+     안에서 글자를 그리면 가로로 찌그러진다. */
+  .preview { position: relative; display: block; background: var(--dark); border-radius: 9px;
+             overflow: hidden; min-height: 180px; }
+  .preview img { display: block; width: 100%; }
+  .preview svg, .preview .tags { position: absolute; inset: 0; pointer-events: none; }
+  .preview .tags span {
+    position: absolute; transform: translate(0, -100%);
+    padding: 0 5px; border-radius: 4px; white-space: nowrap;
+    font-size: 11px; font-weight: 600; color: #fff; background: rgba(24,23,21,.72);
+  }
+  .preview .off {
+    display: flex; align-items: center; justify-content: center; min-height: 180px;
+    padding: 20px; color: var(--muted-soft); font-size: 12.5px; text-align: center;
+  }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 10px 0 6px; font-size: 12px; }
+  .legend i { display: inline-block; width: 14px; height: 10px; margin-right: 5px;
+              border-radius: 2px; vertical-align: middle; }
+  .switches { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .switches label { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; }
+  .switches input[type="checkbox"] { width: auto; }
+
   .evidence { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   .evidence a { display: block; }
   .evidence img {
@@ -243,6 +268,32 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <div class="card">
+        <h2>현장 미리보기 <span class="muted" id="preview-of"></span></h2>
+        <p class="desc">
+          판정이 쓰는 기하를 그대로 영상 위에 그립니다. <b>위험구역</b>은 AMR 진행
+          방향으로 뻗은 통로(속도에 따라 길어집니다), <b>도달범위</b>는 사람이 임박
+          전망 시간 안에 갈 수 있는 바닥 원입니다. 둘이 겹치면 임박입니다.
+          <br />
+          임계값을 바꾸면 구역이 곧바로 늘거나 줄어듭니다 — 숫자가 아니라 이 그림을 보고
+          맞추세요.
+        </p>
+        <div class="preview" id="preview"></div>
+        <div class="legend">
+          <span><i style="background:rgba(204,120,92,.35);border:1px solid #cc785c"></i>위험구역(감시)</span>
+          <span><i style="background:rgba(212,160,23,.35);border:1px solid #d4a017"></i>위험구역(주의)</span>
+          <span><i style="background:rgba(198,69,69,.4);border:1px solid #c64545"></i>위험구역(임박)</span>
+          <span><i style="background:rgba(79,124,172,.3);border:1px solid #4f7cac"></i>사람 도달범위</span>
+        </div>
+        <div class="switches">
+          <button id="preview-toggle">미리보기 정지</button>
+          <label><input type="checkbox" id="show-bbox" />코어가 그릴 사각형 보기</label>
+          <label><input type="checkbox" id="pub-live" />종합 현황에도 보내기</label>
+          <label><input type="checkbox" id="pub-zones" />구역까지 함께 보내기</label>
+        </div>
+        <div class="msg" id="overlay-msg"></div>
       </div>
 
       <div class="card">

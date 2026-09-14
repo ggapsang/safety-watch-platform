@@ -24,8 +24,9 @@ from dataclasses import dataclass
 import geometry
 import judge
 import tracking
+import zones as zones_module
 from _sdk import Debouncer, Frame
-from _sdk.publisher import DETECT_TOPIC, now_iso
+from _sdk.publisher import DETECT_TOPIC, LIVE_TOPIC, now_iso
 from settings import CameraSetup, Thresholds
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,8 @@ class CameraPipeline:
         self.tun: Thresholds = cfg.thresholds()
         self.setup = setup
         self.homography = setup.homography()
+        # 판정은 이미지 → 월드 한 방향이면 되지만 **구역을 그리려면 반대 방향**이 필요하다.
+        self.h_inv = geometry.invert(self.homography)
 
         self.amr = tracking.Tracker(tracking.AMR, max_age=self.tun.track_max_age)
         self.person = tracking.Tracker(tracking.PERSON, max_age=self.tun.track_max_age)
@@ -83,6 +86,10 @@ class CameraPipeline:
         self.last_input = 0.0            # 마지막으로 박스를 받은 시각
         self.publishers: set[str] = set()
         self.pairs: list[judge.Pair] = []
+        self.zones: list[zones_module.Zone] = []
+        # 화면이 읽어 갈 오버레이 한 벌. 판정 스레드가 만들어 **통째로 갈아 끼운다** —
+        # API 스레드가 트래커를 직접 훑으면 도는 중인 자료구조를 읽게 된다.
+        self._overlay: dict = _empty_overlay(camera_id)
 
         self._risk_level = ""            # 지금 이 순간의 수준
         self._risk_peak = 0              # 이번 에피소드에서 발행한 가장 높은 수준
@@ -109,6 +116,7 @@ class CameraPipeline:
         self.cfg = cfg
         self.setup = setup
         self.homography = setup.homography()
+        self.h_inv = geometry.invert(self.homography)
         self.tun = cfg.thresholds()
         self.amr.max_age = self.tun.track_max_age
         self.person.max_age = self.tun.track_max_age
@@ -159,13 +167,16 @@ class CameraPipeline:
         persons = self.person.confirmed()
         amrs = self.amr.confirmed()
         self.pairs = judge.assess(persons, amrs, self.tun)
+        # 구역은 판정 다음에 만든다 — 색(level)이 방금 매긴 수준을 따라가야 한다.
+        self.zones = zones_module.build(persons, amrs, self.pairs, self.tun, self.h_inv)
 
         confirmations = self.watcher.feed(now, self.pairs, self.tun)
         self.watcher.sweep(now, self.tun,
                            {t.track_id for t in persons} | {t.track_id for t in amrs})
 
         self._emit(now, confirmations)
-        self._emit_live(now, persons, amrs)
+        self._snapshot_overlay(persons, amrs)
+        self._emit_live(now)
 
     def close(self, now: float) -> None:
         """할당이 빠지거나 모듈이 내려간다. 켜져 있던 것을 해제한다.
@@ -304,22 +315,72 @@ class CameraPipeline:
         for conf in confirmations:
             self._keep_evidence(conf)
 
-    def _emit_live(self, now: float, persons, amrs) -> None:
-        """선택 — 화면용 오버레이. 쌓이지 않는다(계약 1.3)."""
+    def _snapshot_overlay(self, persons, amrs) -> None:
+        """이번 틱의 그림을 한 벌로 굳힌다. 화면과 라이브 발행이 **같은 것**을 본다.
+
+        둘을 따로 만들면 모듈 화면과 종합 현황이 다른 그림을 그리게 되고, 그때는 어느
+        쪽이 맞는지 아무도 모른다.
+        """
+        by_amr, by_person = zones_module.levels_by_track(self.pairs)
+        tracks = []
+        boxes = []
+        for tr in list(persons) + list(amrs):
+            level = (by_person if tr.kind == tracking.PERSON else by_amr).get(
+                tr.track_id, "")
+            box = dict(tr.box)
+            mark = {judge.WARN: " · 주의", judge.IMMINENT: " · 임박"}.get(level, "")
+            box["label"] = f"{tr.label()}#{tr.track_id}{mark}"
+            boxes.append(box)
+            tracks.append({
+                "track_id": tr.track_id, "kind": tr.kind, "level": level,
+                "label": tr.label(), "box": box,
+                "speed_ms": round(tr.speed, 2),
+                "world": [round(tr.pos[0], 2), round(tr.pos[1], 2)],
+            })
+
+        zone_boxes = [b for b in (z.box() for z in self.zones) if b is not None]
+        self._overlay = {
+            "camera_id": self.camera_id,
+            "ts": now_iso(),
+            "calibrated": self.calibrated,
+            "enabled": self.enabled,
+            "level": self._risk_level,
+            "collisions": len(self.watcher.live()),
+            "tracks": tracks,
+            "boxes": boxes,
+            "zone_boxes": zone_boxes,
+            "zones": [z.shape() for z in self.zones],
+        }
+
+    def overlay(self) -> dict:
+        """화면이 읽어 가는 그림 한 벌(모듈 REST). 판정 스레드가 굳혀 둔 것을 그대로 준다.
+
+        **라이브 발행(`publish_live`)과 무관하게 항상 있다.** 브로커로 내보낼지 말지는
+        운영 결정이고, 자기 화면에서 보는 것은 그것과 별개여야 한다.
+        """
+        return self._overlay
+
+    def _emit_live(self, now: float) -> None:
+        """선택 — 화면용 오버레이를 브로커로도 낸다. 쌓이지 않는다(계약 1.3).
+
+        박스는 계약 그대로(0~1 정규화·사람이 읽을 라벨)라 코어 대시보드가 오늘 그대로
+        그린다. 다각형은 `shapes` 라는 **확장 필드**로 함께 싣는다 — 코어는 모르는 키를
+        무시하고, 원근이 살아 있는 그림이 필요한 쪽만 읽으면 된다. 계약을 바꾸지 않고
+        나중을 열어 두는 자리다.
+        """
         if not self.cfg.publish_live:
             return
         if now - self._last_live < self.cfg.live_min_interval:
             return
         self._last_live = now
-        risky = {id(p.person) for p in self.pairs if p.level} | \
-                {id(p.amr) for p in self.pairs if p.level}
-        boxes = []
-        for tr in list(persons) + list(amrs):
-            box = dict(tr.box)
-            mark = {"warn": " · 주의", "imminent": " · 임박"}.get(self._risk_level, "")
-            box["label"] = f"{tr.label()}#{tr.track_id}" + (mark if id(tr) in risky else "")
-            boxes.append(box)
-        self.pub.publish_live(self.cfg.module_id, self.camera_id, boxes)
+
+        boxes = list(self._overlay["boxes"])
+        payload = {"camera_id": self.camera_id, "module_id": self.cfg.module_id,
+                   "ts": now_iso(), "boxes": boxes}
+        if self.cfg.overlay_zones:
+            boxes.extend(self._overlay["zone_boxes"])
+            payload["shapes"] = self._overlay["zones"]
+        self.pub.publish(LIVE_TOPIC.format(camera_id=self.camera_id), payload)
         self.published += 1
 
     def _publish(self, item: str, state: str, confidence: float, boxes: list[dict],
@@ -369,7 +430,14 @@ class CameraPipeline:
         return ""
 
     def _release(self, now: float) -> None:
-        """판정을 못 하는 상태(미보정·꺼 둠)에서도 켜져 있던 것은 풀어야 한다."""
+        """판정을 못 하는 상태(미보정·꺼 둠)에서도 켜져 있던 것은 풀어야 한다.
+
+        그림도 함께 비운다. 안 그러면 판정을 멈춘 카메라에 마지막 구역이 그대로 남아,
+        보정을 지운 뒤에도 화면에는 위험 구역이 떠 있게 된다.
+        """
+        self.zones = []
+        self._overlay = _empty_overlay(self.camera_id, calibrated=self.calibrated,
+                                       enabled=self.enabled)
         for t in self.debouncer.observe(self.camera_id, now, {}):
             self._publish(t.item, t.state, t.confidence, t.boxes,
                           self._extra(t.item, t.state))
@@ -406,6 +474,14 @@ class CameraPipeline:
             self.on_judgement(Judgement(
                 ts=now_iso(), camera_id=self.camera_id, kind="collision",
                 state="evidence", detail="증거 스냅샷", grade=conf.grade, evidence=name))
+
+
+def _empty_overlay(camera_id: int, *, calibrated: bool = False,
+                   enabled: bool = True) -> dict:
+    """그릴 것이 없을 때의 한 벌. 모양은 늘 같아야 화면이 분기하지 않는다."""
+    return {"camera_id": camera_id, "ts": now_iso(), "calibrated": calibrated,
+            "enabled": enabled, "level": "", "collisions": 0,
+            "tracks": [], "boxes": [], "zone_boxes": [], "zones": []}
 
 
 def _boxes_of(pairs: list[judge.Pair]) -> list[dict]:

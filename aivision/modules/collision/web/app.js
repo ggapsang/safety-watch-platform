@@ -295,6 +295,16 @@ function renderCameras() {
   }
   renderShot();
   renderPoints();
+  renderPreview();
+
+  // 스위치는 손대는 중이 아닐 때만 서버 값으로 맞춘다 — 누르는 순간 폴링이 되돌리면
+  // 체크박스가 혼자 튕겨 나간 것처럼 보인다.
+  if (document.activeElement !== $("pub-live")) {
+    $("pub-live").checked = state.module.publish_live;
+  }
+  if (document.activeElement !== $("pub-zones")) {
+    $("pub-zones").checked = state.module.overlay_zones;
+  }
 }
 
 function renderShot() {
@@ -376,6 +386,7 @@ $("camera-pick").addEventListener("change", () => {
   points = [];
   msg("calib-msg", "");
   renderCameras();
+  pollOverlay();
 });
 
 $("reset-points").onclick = () => {
@@ -432,6 +443,141 @@ $("toggle-enabled").onclick = async () => {
   } catch (e) { msg("calib-msg", e.message, "err"); }
 };
 
+/* ── 미리보기 (구역 오버레이) ──────────────────────────────────────── */
+
+/* 영상은 MJPEG 중계(<img>), 구역은 그 위의 SVG 다. 둘을 겹치는 방식이 코어
+ * 대시보드(LiveVideo.tsx)와 같아서, 여기서 보이는 것과 종합 현황에서 보일 것이
+ * 어긋나지 않는다.
+ *
+ * 폴링은 4Hz 다. 판정 루프가 10Hz 이므로 그보다 자주 물어도 새 그림이 없고,
+ * 더 느리면 임박 구역이 늘었다 줄었다 하는 것이 뚝뚝 끊겨 보인다.
+ */
+const ZONE_STYLE = {
+  corridor: { "": ["rgba(204,120,92,.28)", "#cc785c"],
+              warn: ["rgba(212,160,23,.32)", "#d4a017"],
+              imminent: ["rgba(198,69,69,.38)", "#c64545"] },
+  reach: { "": ["rgba(79,124,172,.26)", "#4f7cac"],
+           warn: ["rgba(79,124,172,.3)", "#4f7cac"],
+           imminent: ["rgba(198,69,69,.3)", "#c64545"] },
+};
+
+let previewOn = true;
+let previewCamera = null;
+let overlayTimer = null;
+
+function renderPreview() {
+  const host = $("preview");
+  $("preview-of").textContent = pickedCamera === null ? "" : `— 카메라 ${pickedCamera}`;
+
+  if (!previewOn || pickedCamera === null) {
+    host.innerHTML = `<div class="off">미리보기를 정지했습니다. 영상 중계와 폴링을
+      멈춘 상태입니다.</div>`;
+    previewCamera = null;
+    return;
+  }
+  if (previewCamera !== pickedCamera) {
+    previewCamera = pickedCamera;
+    // 스트림은 카메라가 바뀔 때만 새로 연다. 매번 다시 열면 화면이 계속 깜빡인다.
+    host.innerHTML =
+      `<img id="preview-img" alt="카메라 ${pickedCamera} 라이브"
+            src="/api/cameras/${pickedCamera}/stream?t=${Date.now()}" />
+       <svg id="preview-svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
+       <div class="tags" id="preview-tags"></div>`;
+    $("preview-img").onerror = () => {
+      host.innerHTML = `<div class="off">영상을 가져오지 못했습니다.<br />
+        카메라가 꺼져 있거나 플랫폼이 보이지 않습니다.</div>`;
+      previewCamera = null;
+    };
+  }
+}
+
+async function pollOverlay() {
+  if (!previewOn || pickedCamera === null || document.hidden) return;
+  let data;
+  try {
+    data = await api(`/api/overlay/${pickedCamera}`);
+  } catch { return; }
+  drawOverlay(data);
+}
+
+function drawOverlay(data) {
+  const svg = $("preview-svg");
+  const tags = $("preview-tags");
+  if (!svg || !tags) return;
+
+  const parts = [];
+  const labels = [];
+  const showBox = $("show-bbox").checked;
+
+  for (const z of data.zones || []) {
+    const [fill, stroke] = (ZONE_STYLE[z.kind] || ZONE_STYLE.corridor)[z.level || ""]
+      || ZONE_STYLE.corridor[""];
+    const points = (z.points || []).map((p) => `${p[0]},${p[1]}`).join(" ");
+    if (!points) continue;
+    parts.push(`<polygon points="${points}" fill="${fill}" stroke="${stroke}"
+      stroke-width="2" stroke-dasharray="${z.kind === "reach" ? "4 3" : "0"}"
+      vector-effect="non-scaling-stroke" />`);
+    // 이름표는 다각형의 가장 위쪽 꼭짓점에 붙인다
+    const top = (z.points || []).reduce((a, b) => (b[1] < a[1] ? b : a));
+    labels.push([top[0], top[1], z.label, stroke]);
+  }
+
+  // 코어(종합 현황)가 그리게 될 사각형. 다각형과 얼마나 다른지 눈으로 보라고 둔다.
+  if (showBox) {
+    for (const b of data.zone_boxes || []) {
+      parts.push(`<rect x="${b.x1}" y="${b.y1}" width="${Math.max(0, b.x2 - b.x1)}"
+        height="${Math.max(0, b.y2 - b.y1)}" fill="none" stroke="#8e8b82"
+        stroke-width="1.5" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" />`);
+    }
+  }
+
+  for (const t of data.tracks || []) {
+    const b = t.box;
+    const stroke = t.level === "imminent" ? "#c64545"
+      : t.level === "warn" ? "#d4a017" : "#efe9de";
+    parts.push(`<rect x="${b.x1}" y="${b.y1}" width="${Math.max(0, b.x2 - b.x1)}"
+      height="${Math.max(0, b.y2 - b.y1)}" fill="none" stroke="${stroke}"
+      stroke-width="2" vector-effect="non-scaling-stroke" />`);
+    labels.push([b.x1, b.y1, `${b.label} · ${fmt(t.speed_ms)}m/s`, stroke]);
+  }
+
+  svg.innerHTML = parts.join("");
+  tags.innerHTML = labels.map(([x, y, text, color]) =>
+    `<span style="left:${(x * 100).toFixed(2)}%; top:${(y * 100).toFixed(2)}%;
+       color:${color}">${esc(text)}</span>`).join("");
+
+  if (!data.assigned) {
+    msg("overlay-msg", "이 카메라는 이 모듈에 할당되지 않았습니다 — 판정도 그림도 없습니다.");
+  } else if (!data.calibrated) {
+    msg("overlay-msg", "보정 전이라 구역을 그릴 수 없습니다. 위에서 바닥 4점을 찍으세요.", "err");
+  } else if (!(data.zones || []).length) {
+    msg("overlay-msg", "AMR·사람이 보이지 않습니다. 발행자가 박스를 내고 있는지 확인하세요.");
+  } else {
+    msg("overlay-msg", "");
+  }
+}
+
+$("preview-toggle").onclick = () => {
+  previewOn = !previewOn;
+  $("preview-toggle").textContent = previewOn ? "미리보기 정지" : "미리보기 시작";
+  renderPreview();
+};
+
+$("show-bbox").addEventListener("change", () => pollOverlay());
+
+async function saveOverlay() {
+  try {
+    await api("/api/overlay", json("PUT", {
+      publish_live: $("pub-live").checked, zones: $("pub-zones").checked }));
+    msg("overlay-msg", $("pub-live").checked
+      ? "종합 현황으로 내보냅니다. 같은 카메라에 다른 모듈도 라이브를 내면 두 그림이 번갈아 보입니다."
+      : "내보내기를 껐습니다. 이 화면에서는 계속 보입니다.", "ok");
+    refresh();
+  } catch (e) { msg("overlay-msg", e.message, "err"); }
+}
+
+["pub-live", "pub-zones"].forEach((id) => $(id).addEventListener("change", saveOverlay));
+
 /* ── 최근 판정 ─────────────────────────────────────────────────────── */
 
 function renderFeed() {
@@ -469,6 +615,14 @@ function renderFeed() {
   await loadSolutions();
   await refresh();
   setInterval(refresh, 3000);
+  // 구역은 훨씬 자주 바뀐다(AMR 이 움직이는 동안 늘었다 줄었다 한다). 상태 폴링과
+  // 주기를 나눠 둔다 — 3초마다 그리면 그림이 뚝뚝 끊기고, 0.25초마다 상태를 통째로
+  // 받으면 그것대로 낭비다.
+  overlayTimer = setInterval(pollOverlay, 250);
+  // 탭이 가려지면 영상 중계를 붙들고 있을 이유가 없다. 카메라 쪽 부담이다.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) pollOverlay();
+  });
   // 탐지 항목은 자주 바뀌지 않는다. 플랫폼이 늦게 떴을 때를 위해 가끔만 다시 받는다.
   setInterval(async () => { await loadSolutions(); if (state) renderItems(); }, 30000);
   window.addEventListener("resize", renderShot);

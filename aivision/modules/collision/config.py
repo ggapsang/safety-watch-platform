@@ -50,7 +50,14 @@ class Config(BaseConfig):
     collision_item: str = "COLLISION"
     # 라이브 오버레이(기획 2.3 선택). 기본은 끈다 — 화면용일 뿐인데 켜 두면 초당 여러 건이
     # 브로커를 지나고, 다른 규칙 플러그인이 그것을 또 먹을 수 있다.
+    #
+    # 켤 때 알아야 할 것: 코어 대시보드는 **카메라별로 마지막 라이브 메시지의 박스를
+    # 통째로 교체**한다(web/src/lib/hooks.ts). 같은 카메라에 객체감지 모듈도 라이브를
+    # 내고 있으면 두 발행자의 그림이 번갈아 보인다. 우리 그림이 상위집합(원본 박스 +
+    # 구역)이므로, 구역까지 보려면 다른 발행자의 라이브를 끄는 편이 낫다.
     publish_live: bool = False
+    # 위험 구역을 라이브에 함께 실을지. 모듈 자기 화면은 이 값과 무관하게 늘 그린다.
+    overlay_zones: bool = True
 
     # ── 판정 ──
     # 판정 루프 주기. 발행자가 초당 3장을 내도 트랙은 그보다 촘촘히 굴러야 한다 —
@@ -92,6 +99,7 @@ def load() -> Config:
     cfg.risk_item = env("RISK_ITEM", cfg.risk_item)
     cfg.collision_item = env("COLLISION_ITEM", cfg.collision_item)
     cfg.publish_live = flag("PUBLISH_LIVE", False)
+    cfg.overlay_zones = flag("OVERLAY_ZONES", True)
     cfg.tick_hz = max(1.0, num("TICK_HZ", cfg.tick_hz))
     cfg.evidence_snapshot = flag("EVIDENCE_SNAPSHOT", True)
     cfg.evidence_keep = int(num("EVIDENCE_KEEP", cfg.evidence_keep))
@@ -137,6 +145,9 @@ def apply_settings(cfg: Config, s: settings_module.Settings) -> None:
     if s.items_set:
         cfg.risk_item = s.risk_item
         cfg.collision_item = s.collision_item
+    if s.overlay_set:
+        cfg.publish_live = s.publish_live
+        cfg.overlay_zones = s.overlay_zones
 
     cfg.tuning = s.merged_tuning(cfg.tuning)
     # Debouncer 는 이 두 값을 직접 본다. 임계값 표와 어긋나지 않게 같이 옮긴다.
