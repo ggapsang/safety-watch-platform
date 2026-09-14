@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { Button, Card, Section } from "../components/ui";
+import { reachableEndpoint } from "../lib/endpoint";
 import { useModules } from "../lib/hooks";
 
 export function ModuleFrame() {
@@ -62,6 +63,11 @@ export function ModuleFrame() {
     );
   }
 
+  // 플러그인이 적어 둔 주소를 브라우저가 닿을 수 있는 곳으로 옮긴다. 대부분
+  // 'http://localhost:11990' 이라고 적는데, 다른 PC 에서 대시보드를 열면 그 localhost 는
+  // 보는 사람의 PC 를 가리켜 '연결을 거부했습니다' 가 뜬다. lib/endpoint.ts 참조.
+  const src = reachableEndpoint(mod.endpoint);
+
   return (
     <Section
       title={mod.name}
@@ -69,12 +75,12 @@ export function ModuleFrame() {
       actions={
         <>
           <span className="text-[12.5px] text-muted">
-            {mod.alive ? "연결됨" : "응답 없음"} · {mod.endpoint}
+            {mod.alive ? "연결됨" : "응답 없음"} · {src}
           </span>
           <Button size="sm" onClick={() => setNonce((n) => n + 1)}>
             새로 고침
           </Button>
-          <Button size="sm" onClick={() => window.open(mod.endpoint, "_blank", "noopener")}>
+          <Button size="sm" onClick={() => window.open(src, "_blank", "noopener")}>
             새 창으로
           </Button>
         </>
@@ -94,7 +100,7 @@ export function ModuleFrame() {
       <Card padded={false} className="overflow-hidden">
         <iframe
           key={nonce}
-          src={mod.endpoint}
+          src={src}
           title={mod.name}
           className="block h-[calc(100vh-210px)] min-h-[520px] w-full border-0 bg-canvas"
         />
