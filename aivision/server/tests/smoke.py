@@ -529,6 +529,52 @@ async def main() -> int:
                   sysinfo.get("record", {}).get("limit_gb") == 5, str(sysinfo.get("record")))
             await c.put("/api/settings", json={"record_max_gb": 0})
 
+            # ── 요일·시간대 스케줄 ─────────────────────────────────────
+            # 미디어 서버는 스케줄을 모른다. 때가 되면 코어가 켜고 끈다. 판정이 틀리면
+            # 현장에서 '녹화가 안 된다' 로 만나므로 경계를 못 박아 둔다.
+            from datetime import datetime as _dt
+
+            from zoneinfo import ZoneInfo as _ZI
+
+            kst = _ZI("Asia/Seoul")
+            mon, sat = 14, 19          # 2026-09-14 월요일, 2026-09-19 토요일
+            at = lambda d, h: _dt(2026, 9, d, h, 0, tzinfo=kst)     # noqa: E731
+
+            check("스케줄이 없으면 항상", rec.should_record(None, at(mon, 3)))
+
+            wk = {"windows": [{"days": [0, 1, 2, 3, 4], "start": "08:00", "end": "18:00"}]}
+            check("평일 구간 안", rec.should_record(wk, at(mon, 9)))
+            check("시작 전은 아님", not rec.should_record(wk, at(mon, 7)))
+            check("끝 시각은 포함하지 않는다", not rec.should_record(wk, at(mon, 18)))
+            check("고르지 않은 요일은 아님", not rec.should_record(wk, at(sat, 9)))
+
+            # 자정을 넘는 구간. 요일은 '시작한 날' 을 가리킨다 — 금요일 밤샘은
+            # 토요일 새벽까지가 사람이 뜻하는 바다.
+            ni = {"windows": [{"days": [4], "start": "22:00", "end": "06:00"}]}
+            check("자정 전", rec.should_record(ni, at(mon + 4, 23)))
+            check("자정 넘어 다음 날 새벽", rec.should_record(ni, at(sat, 2)))
+            check("다음 날 아침은 아님", not rec.should_record(ni, at(sat, 7)))
+
+            check("읽을 수 없는 구간은 버린다",
+                  rec.windows_of({"windows": [{"start": "25:00", "end": "x"}]}) == [])
+            check("요약 문구", rec.describe(wk) == "월화수목금 08:00~18:00", rec.describe(wk))
+
+            # 저장은 엄격하게 — 잘못 적은 구간이 조용히 사라지면 '왜 안 되지' 가 된다
+            r = await c.patch(f"/api/cameras/{cid}",
+                              json={"record_schedule": {"windows": [{"start": "9", "end": "x"}]}})
+            check("잘못된 스케줄은 저장 단계에서 거절", r.status_code == 400, r.text)
+
+            r = await c.patch(f"/api/cameras/{cid}",
+                              json={"record_enabled": True, "record_max_gb": 3,
+                                    "record_schedule": wk})
+            body = r.json()
+            check("카메라별 상한 저장", body["record_max_gb"] == 3, r.text)
+            check("스케줄 요약이 함께 내려온다",
+                  body["record_schedule_text"] == "월화수목금 08:00~18:00", r.text)
+            await c.patch(f"/api/cameras/{cid}",
+                          json={"record_enabled": False, "record_max_gb": 0,
+                                "record_schedule": None})
+
             # ── 완충장치: 같은 메시지가 쏟아질 때 ───────────────────────
             # 현장 시나리오 그대로다. 카메라 엣지가 토픽 "invasion" 에 고정 문구
             # "someone invasion" 을 발행하고, 그것이 초당 여러 번 쏟아진다.

@@ -38,6 +38,16 @@ export interface Camera {
   rtsp_url: string;
   record_enabled: boolean;
   record_retention_hours: number;
+  /** 이 카메라 몫의 용량 상한(GB). 0 이면 이 카메라만의 제한 없음 — 전체 상한은 그대로 적용된다 */
+  record_max_gb: number;
+  /** 요일·시간대 자동 녹화. null 이면 항상 */
+  record_schedule: RecordSchedule | null;
+  /** 서버가 만들어 준 사람이 읽을 요약. 화면이 JSON 을 해석하지 않게 한다 */
+  record_schedule_text: string;
+  /** 스케줄까지 따졌을 때 지금 녹화 중인가 */
+  recording_now: boolean;
+  /** 이 카메라가 쓰고 있는 용량(GB) */
+  record_used_gb: number;
   /** 화면에 늘어놓는 순서 (작을수록 앞). 스트립에서 끌어 바꾼다 */
   sort_order: number;
   today: number;
@@ -59,6 +69,23 @@ export interface CameraInput {
   enabled: boolean;
   record_enabled: boolean;
   record_retention_hours: number;
+  record_max_gb: number;
+  record_schedule: RecordSchedule | null;
+}
+
+/** 요일·시간대 자동 녹화 구간 하나.
+ *
+ *  `days` 는 0=월 … 6=일. `start`/`end` 는 "HH:MM" 이고 **현장 시간대**(서버 TZ,
+ *  기본 Asia/Seoul)로 읽는다 — 현장 사람이 벽시계를 보고 적는 값이다.
+ *  `start > end` 면 자정을 넘는 구간이고, 그때 `days` 는 **시작한 날**을 가리킨다. */
+export interface RecordWindow {
+  days: number[];
+  start: string;
+  end: string;
+}
+
+export interface RecordSchedule {
+  windows: RecordWindow[];
 }
 
 export interface CameraTestResult {

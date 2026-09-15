@@ -68,6 +68,13 @@ class CameraOut(BaseModel):
     rtsp_sub_url: str = ""         # 그중 저화질 (추론 모듈용). 없으면 빈 값
     record_enabled: bool = False
     record_retention_hours: int = 72
+    # 이 카메라 몫의 용량 상한(GB). 0 이면 이 카메라만의 제한 없음(전체 상한은 그대로 적용)
+    record_max_gb: float = 0.0
+    # 요일·시간대 자동 녹화. 비우면 항상. 시각은 현장 시간대로 읽는다
+    record_schedule: dict | None = None
+    record_schedule_text: str = "항상"   # 사람이 읽을 요약
+    recording_now: bool = False          # 스케줄까지 따졌을 때 지금 녹화 중인가
+    record_used_gb: float = 0.0          # 이 카메라가 쓰고 있는 용량
     sort_order: int = 0            # 화면에 늘어놓는 순서 (작을수록 앞)
     today: int = 0                 # 금일 이벤트 수
     total: int = 0                 # 누적 이벤트 수
@@ -107,6 +114,8 @@ class CameraCreate(BaseModel):
     enabled: bool = True
     record_enabled: bool = False
     record_retention_hours: int = 72
+    record_max_gb: float = 0.0
+    record_schedule: dict | None = None
     sols: list[str] = Field(default_factory=list)
 
     @field_validator("mac")
@@ -133,6 +142,8 @@ class CameraPatch(BaseModel):
     enabled: bool | None = None
     record_enabled: bool | None = None
     record_retention_hours: int | None = None
+    record_max_gb: float | None = None
+    record_schedule: dict | None = None
     sols: list[str] | None = None
 
     @field_validator("mac")

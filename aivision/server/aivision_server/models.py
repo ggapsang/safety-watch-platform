@@ -101,6 +101,20 @@ class Camera(Base):
     record_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # 보존 시간. 일 단위로는 "6시간만 두고 싶다" 같은 요구를 표현할 수 없어 시간으로 둔다.
     record_retention_hours: Mapped[int] = mapped_column(Integer, default=72)
+    # 이 카메라 몫의 용량 상한(GB). 0 이면 이 카메라만의 제한은 없다.
+    #
+    # 전체 상한(운영 설정)이 사라진 것이 아니다. 카메라별 상한만 두면 그 합이 디스크를
+    # 넘을 수 있어 정작 막고 싶었던 사고를 못 막는다. 그래서 **둘 다** 지킨다 —
+    # 카메라별로 먼저 깎고, 그래도 전체가 넘으면 전체 기준으로 한 번 더 깎는다.
+    record_max_gb: Mapped[float] = mapped_column(Float, default=0.0)
+    # 요일·시간대 자동 녹화. 비어 있으면 record_enabled 인 동안 항상 녹화한다.
+    #
+    #   {"windows": [{"days": [0,1,2,3,4], "start": "08:00", "end": "18:00"}]}
+    #
+    # days 는 0=월 … 6=일(파이썬 weekday). 시각은 **현장 시간대**(TZ, 기본 Asia/Seoul)로
+    # 읽는다 — 현장 사람이 벽시계를 보고 적는 값이라 UTC 로 두면 매번 환산해야 한다.
+    # start > end 면 자정을 넘는 구간이다(예: 22:00~06:00).
+    record_schedule: Mapped[dict | None] = mapped_column(JSON)
 
     # 온라인 여부는 '영상 수신' 또는 'MQTT heartbeat' 중 하나라도 살아 있으면 True.
     online: Mapped[bool] = mapped_column(Boolean, default=False)

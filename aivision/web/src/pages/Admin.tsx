@@ -30,6 +30,7 @@ import {
   Td,
   cx,
 } from "../components/ui";
+import { RecordSchedule } from "../components/RecordSchedule";
 import { api, ApiError } from "../lib/api";
 import { fmtAgo, fmtBytes, fmtHours } from "../lib/format";
 import { boxColor, colorKey } from "../lib/boxcolor";
@@ -61,6 +62,8 @@ const EMPTY: CameraInput = {
   enabled: true,
   record_enabled: false,
   record_retention_hours: 72,
+  record_max_gb: 0,
+  record_schedule: null,
 };
 
 export function Admin() {
@@ -132,7 +135,22 @@ function CameraAdmin() {
                     <span className="ml-1 text-muted-soft">{c.rtsp_path}</span>
                   </Td>
                   <Td className="whitespace-nowrap text-muted">
-                    {c.record_enabled ? fmtHours(c.record_retention_hours) + " 보존" : "안 함"}
+                    {!c.record_enabled ? (
+                      "안 함"
+                    ) : (
+                      <>
+                        {/* 켜 두었는데 지금 시간이 아니면 '대기'. 이게 없으면 스케줄을
+                          * 걸어 둔 사람이 '왜 녹화가 안 되지' 로 만난다. */}
+                        <span className="inline-flex items-center gap-[6px]">
+                          <Dot ok={c.recording_now} />
+                          {c.recording_now ? "녹화 중" : "대기"}
+                        </span>
+                        <div className="text-[11.5px] text-muted-soft">
+                          {c.record_schedule_text} · {fmtHours(c.record_retention_hours)} 보존
+                          {c.record_max_gb > 0 && ` · ${c.record_used_gb}/${c.record_max_gb}GB`}
+                        </div>
+                      </>
+                    )}
                   </Td>
                   <Td className="whitespace-nowrap text-muted">
                     {c.last_seen_at ? fmtAgo(c.last_seen_at) : "-"}
@@ -215,6 +233,8 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
             enabled: camera.enabled,
             record_enabled: camera.record_enabled,
             record_retention_hours: camera.record_retention_hours,
+            record_max_gb: camera.record_max_gb,
+            record_schedule: camera.record_schedule,
           }
         : EMPTY,
     );
@@ -401,6 +421,31 @@ function CameraForm({ camera, onClose }: { camera: Camera | null; onClose: () =>
                 {fmtHours(form.record_retention_hours)}
               </p>
             </Field>
+          )}
+          {form.record_enabled && (
+            <>
+              <Field
+                label="이 카메라 용량 상한 (GB)"
+                className="mt-4 max-w-[260px]"
+                hint="넘으면 이 카메라의 오래된 영상부터 지웁니다. 0 이면 이 카메라만의 제한은
+                      없습니다. 전체 상한(운영 설정)은 그것과 별개로 늘 적용됩니다 —
+                      카메라별 상한만 두면 그 합이 디스크를 넘을 수 있기 때문입니다."
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={form.record_max_gb}
+                  onChange={(e) =>
+                    set("record_max_gb", Math.max(0, Number(e.target.value) || 0))
+                  }
+                />
+              </Field>
+              <RecordSchedule
+                value={form.record_schedule}
+                onChange={(v) => set("record_schedule", v)}
+              />
+            </>
           )}
         </fieldset>
 

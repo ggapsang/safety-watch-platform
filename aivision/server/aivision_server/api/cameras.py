@@ -19,6 +19,7 @@ from ..models import Camera, CameraSolution, Event, Solution
 from ..schemas import (CameraCreate, CameraOrder, CameraOut, CameraPatch,
                        CameraTestResult)
 from ..services import cleanup
+from ..services import recording
 from ..services.bus import bus
 from ..streaming.manager import manager, masked_rtsp_url, rtsp_url
 from ..timeutil import age_sec, as_utc
@@ -51,9 +52,42 @@ def to_dto(cam: Camera, *, today: int = 0, total: int = 0) -> CameraOut:
         rtsp_path_sub=cam.rtsp_path_sub,
         record_enabled=cam.record_enabled,
         record_retention_hours=cam.record_retention_hours,
+        record_max_gb=cam.record_max_gb,
+        record_schedule=cam.record_schedule,
+        # 화면이 스케줄 JSON 을 해석하지 않아도 되게 요약과 현재 상태를 함께 준다.
+        # 두 곳에서 따로 해석하면 '화면은 녹화 중이라는데 실제로는 아닌' 일이 생긴다.
+        record_schedule_text=recording.describe(cam.record_schedule),
+        recording_now=recording.wanted_now(cam),
+        record_used_gb=recording.camera_usage(cam.id)["gb"],
         sort_order=cam.sort_order,
         today=today, total=total,
     )
+
+
+def _checked_schedule(schedule: dict | None) -> dict | None:
+    """스케줄을 저장 전에 걸러 낸다.
+
+    `recording.windows_of` 가 잘못된 줄을 조용히 버리므로 저장은 언제나 되지만, 그러면
+    사람은 자기가 적은 구간이 없어진 줄 모른 채 '녹화가 안 된다' 로 만난다. 저장 시점에
+    거절해 그 자리에서 알린다 — 판정은 관대하게, 입력은 엄격하게.
+    """
+    if not schedule:
+        return None
+    if not isinstance(schedule, dict) or not isinstance(schedule.get("windows"), list):
+        raise HTTPException(status_code=400,
+                            detail="스케줄은 {\"windows\": [...]} 모양이어야 합니다")
+    raw = schedule["windows"]
+    kept = recording.windows_of(schedule)
+    if len(kept) != len(raw):
+        raise HTTPException(
+            status_code=400,
+            detail="읽을 수 없는 구간이 있습니다. 시각은 HH:MM 이고 시작과 끝이 달라야 합니다.")
+    # 걸러 낸 모양으로 저장한다. 사람이 적은 그대로 두면 요일이 비었을 때(=매일)를
+    # 화면과 판정이 다르게 읽을 수 있다.
+    return {"windows": kept and [{"days": w["days"],
+                                  "start": f"{w['start'] // 60:02d}:{w['start'] % 60:02d}",
+                                  "end": f"{w['end'] // 60:02d}:{w['end'] % 60:02d}"}
+                                 for w in kept]} or None
 
 
 def _recently_seen(cam: Camera) -> bool:
@@ -108,7 +142,9 @@ async def _after_change(session: AsyncSession) -> None:
     from ..services.recording import apply_all
 
     await manager.sync(session)
-    await apply_all(session)
+    # force — 사람이 방금 고친 것이다. 캐시가 '안 바뀌었다' 고 판단해 건너뛰면
+    # 저장은 됐는데 반영은 안 된 상태가 된다.
+    await apply_all(session, force=True)
     await registry.reload_all()
     await bus.publish("cameras-changed", {})
 
@@ -173,6 +209,8 @@ async def create_camera(body: CameraCreate,
         rtsp_path_sub=(body.rtsp_path_sub or "").strip(),
         record_enabled=body.record_enabled,
         record_retention_hours=max(1, body.record_retention_hours),
+        record_max_gb=max(0.0, body.record_max_gb),
+        record_schedule=_checked_schedule(body.record_schedule),
     )
     session.add(cam)
     try:
@@ -203,6 +241,11 @@ async def patch_camera(camera_id: int, body: CameraPatch,
                 raise HTTPException(status_code=400,
                                     detail="이름과 설치 위치는 비울 수 없습니다")
             data[field] = value
+
+    if "record_schedule" in data:
+        data["record_schedule"] = _checked_schedule(data["record_schedule"])
+    if "record_max_gb" in data:
+        data["record_max_gb"] = max(0.0, float(data["record_max_gb"] or 0))
 
     sols = data.pop("sols", None)
     password = data.pop("password", None)

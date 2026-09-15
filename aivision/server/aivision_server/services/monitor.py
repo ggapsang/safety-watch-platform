@@ -92,6 +92,23 @@ async def _enforce_record_quota() -> None:
     await enforce_quota(max_gb)
 
 
+async def _apply_record_schedule() -> None:
+    """요일·시간대 스케줄을 미디어 서버에 반영한다.
+
+    미디어 서버는 스케줄을 모른다. 때가 되면 코어가 녹화를 켜고 끈다.
+
+    매번 부르지만 실제 PATCH 는 상태가 바뀔 때만 나간다(recording._applied). 안 그러면
+    미디어 서버 로그가 '녹화 켬' 으로 가득 찬다.
+
+    판정은 **현장 시간대**로 한다. 현장 사람이 벽시계를 보고 적은 값이라, 서버를 UTC 로
+    띄우는 순간 9시간이 어긋나면 안 된다.
+    """
+    from .recording import apply_all
+
+    async with sessionmaker()() as session:
+        await apply_all(session)
+
+
 async def run() -> None:
     last_purge = 0.0
     last_quota = 0.0
@@ -99,6 +116,7 @@ async def run() -> None:
     while True:
         try:
             await _check_cameras()
+            await _apply_record_schedule()
             if loop.time() - last_purge > PURGE_INTERVAL:
                 last_purge = loop.time()
                 await _purge_logs()

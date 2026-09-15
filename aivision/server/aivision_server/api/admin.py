@@ -20,7 +20,7 @@ from ..config import get_settings
 from ..db import get_session
 from ..detection.registry import registry
 from ..media import backend as media_backend
-from ..models import MqttMessage, Solution
+from ..models import Camera, MqttMessage, Solution
 from ..schemas import SettingsOut, SettingsPatch, SolutionOut, SolutionPatch
 from ..services import cleanup, config_file, raw_log, throttle
 from ..services import settings_store as store
@@ -176,9 +176,15 @@ async def purge_recordings(session: AsyncSession = Depends(get_session)) -> dict
     s = get_settings()
     runtime = await store.get_runtime(session)
     max_gb = float(runtime.get("record_max_gb", s.record_max_gb) or 0)
-    if max_gb <= 0:
-        raise HTTPException(status_code=400,
-                            detail="용량 상한이 설정돼 있지 않습니다. 운영 설정에서 먼저 정하세요.")
+    # 상한이 한 군데도 없으면 할 일이 없다. 전체뿐 아니라 카메라별도 본다 —
+    # 전체를 0 으로 두고 카메라별로만 거는 현장이 있다.
+    any_camera = await session.scalar(
+        select(func.count(Camera.id)).where(Camera.record_max_gb > 0))
+    if max_gb <= 0 and not any_camera:
+        raise HTTPException(
+            status_code=400,
+            detail="용량 상한이 한 군데도 설정돼 있지 않습니다. "
+                   "운영 설정의 전체 상한이나 카메라별 상한을 먼저 정하세요.")
     result = await recording_service.enforce_quota(max_gb)
     return {**result, "usage": recording_service.usage()}
 
