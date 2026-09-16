@@ -111,17 +111,33 @@
   .muted { color: var(--muted); }
   code { font: 12px ui-monospace, Consolas, monospace; color: var(--body-strong); }
 
+  /* 카메라별 모델 표. 모델 이름이 길면 칸이 밀려 '쓸 모델' 이 한 줄에 못 들어간다.
+     폭을 못 박아 두고 체크박스 칸에 남는 자리를 준다. */
+  table.cams { table-layout: fixed; }
+  table.cams td { vertical-align: middle; }
+  table.cams th:nth-child(1), table.cams td:nth-child(1) { width: 19%; }
+  table.cams th:nth-child(2), table.cams td:nth-child(2) { width: 19%; }
+  table.cams th:nth-child(4), table.cams td:nth-child(4) { width: 23%; }
+
   /* 카메라별 모델 고르기. 드롭다운(multiple)은 ctrl+클릭을 알아야 여러 개를 고를 수
      있어서 현장에서 못 쓴다 — 체크박스는 보이는 대로 누르면 된다. */
-  .picks { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .picks { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; }
   .picks label {
     display: inline-flex; align-items: center; gap: 5px;
     margin: 0; font-size: 12px; cursor: pointer;
+    /* 글자 중간에서 줄이 바뀌면 '사용 / 안 함' 처럼 쪼개져 읽힌다. 줄바꿈은 항목과
+       항목 사이에서만 일어나게 한다. */
+    white-space: nowrap;
   }
   .picks input { margin: 0; cursor: pointer; }
-  .picks label.off { font-weight: 600; color: var(--error); }
-  /* '사용 안 함' 과 모델 목록을 눈으로 갈라 둔다. 정반대 뜻이라 섞여 보이면 안 된다. */
-  .picks .sep { width: 1px; align-self: stretch; background: var(--hairline); }
+  /* '사용 안 함' 은 모델 목록과 정반대 뜻이다. 같은 모양으로 늘어놓으면 모델 하나를
+     고르는 것으로 읽히므로, 칩으로 감싸고 선으로 갈라 둔다. */
+  .picks label.off {
+    padding: 2px 9px; border-radius: 99px; font-weight: 600;
+    background: var(--surface-card); color: var(--muted);
+  }
+  .picks label.off.on { background: #fdecec; color: var(--error); }
+  .picks .sep { width: 1px; height: 15px; background: var(--hairline); }
   .picks.disabled label:not(.off) { opacity: 0.4; }
 </style>
 </head>
@@ -196,9 +212,13 @@
           수에 정비례해 비싸므로, 안 볼 곳을 꺼 두는 것이 가장 확실하게 아끼는 방법입니다.<br />
           담당 카메라는 플랫폼에서 정합니다 — 플러그인 탭 위쪽의 '이 플러그인이 볼 카메라'.
         </p>
-        <table>
+        <table class="cams">
           <thead><tr><th>카메라</th><th>설치 위치</th><th>쓸 모델</th><th>지금</th></tr></thead>
-          <tbody id="camera-rows"></tbody>
+          <!-- 비워 두지 않는다. 담당 카메라를 플랫폼에서 받아 오는 동안 빈 표가 보이면
+               '할당이 안 됐나' 로 읽힌다. -->
+          <tbody id="camera-rows">
+            <tr><td colspan="4" class="muted">불러오는 중…</td></tr>
+          </tbody>
         </table>
         <div class="msg" id="camera-msg"></div>
       </div>

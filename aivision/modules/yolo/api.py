@@ -89,6 +89,31 @@ def create_app(cfg, runner_status: Callable[[], dict],
         config_module.apply_settings(cfg, s)
         reload_workers()
 
+    async def _platform_json(path: str, what: str):
+        """플랫폼에서 JSON 을 받아 온다. 못 받으면 None.
+
+        **다른 스레드에서 받는다.** urllib 은 블로킹이라 async 함수 안에서 그냥 부르면
+        받는 동안 uvicorn 의 이벤트 루프가 통째로 멈춘다 — 플랫폼이 안 뜰 때 이 한 줄이
+        타임아웃 5초를 잡아먹고, 그동안 이 모듈 화면의 모든 요청이 같이 선다.
+
+        플랫폼이 안 보여도 화면은 살아 있어야 하므로 예외를 삼키고 None 으로 내려앉는다.
+        """
+        import asyncio
+        import json
+        import urllib.request
+
+        url = f"{cfg.platform_url.rstrip('/')}{path}"
+
+        def fetch():
+            with urllib.request.urlopen(url, timeout=5) as resp:      # noqa: S310
+                return json.loads(resp.read().decode("utf-8"))
+
+        try:
+            return await asyncio.to_thread(fetch)
+        except Exception as exc:                                      # noqa: BLE001
+            log.warning("%s 를 가져오지 못했습니다 (%s): %s", what, url, exc)
+            return None
+
     def _model_file(name: str) -> Path:
         if not SAFE_NAME.match(name) or not name.endswith(".onnx"):
             raise HTTPException(status_code=400, detail="모델 파일 이름이 올바르지 않습니다")
@@ -145,15 +170,8 @@ def create_app(cfg, runner_status: Callable[[], dict],
         모듈이 플랫폼을 조회만 한다 — 코어는 이 모듈이 무엇을 하는지 여전히 모른다.
         플랫폼이 안 보여도 화면이 죽으면 안 되므로 빈 목록으로 내려앉는다.
         """
-        import json
-        import urllib.request
-
-        url = f"{cfg.platform_url.rstrip('/')}/api/solutions"
-        try:
-            with urllib.request.urlopen(url, timeout=5) as resp:      # noqa: S310
-                data = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:                                      # noqa: BLE001
-            log.warning("탐지 항목을 가져오지 못했습니다 (%s): %s", url, exc)
+        data = await _platform_json("/api/solutions", "탐지 항목")
+        if data is None:
             return JSONResponse({"items": [], "error": "플랫폼에 연결하지 못했습니다"})
         return JSONResponse({"items": [
             {"code": x.get("code"), "name": x.get("short_name") or x.get("name")}
@@ -219,16 +237,9 @@ def create_app(cfg, runner_status: Callable[[], dict],
         '어느 카메라에 어느 모델' 만 더한다 — 할당까지 여기서 하면 같은 일을 두 곳에서
         하게 되고, 어느 쪽이 맞는지 아무도 모르게 된다.
         """
-        import json
-        import urllib.request
-
         s = _load()
-        url = f"{cfg.platform_url.rstrip('/')}/api/modules/{cfg.module_id}/work"
-        try:
-            with urllib.request.urlopen(url, timeout=5) as resp:      # noqa: S310
-                work = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:                                      # noqa: BLE001
-            log.warning("일감을 가져오지 못했습니다 (%s): %s", url, exc)
+        work = await _platform_json(f"/api/modules/{cfg.module_id}/work", "일감")
+        if work is None:
             return JSONResponse({"items": [], "error": "플랫폼에 연결하지 못했습니다"})
 
         active = cfg.model_path.name if cfg.model_path else ""

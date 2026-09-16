@@ -45,6 +45,11 @@ async function refresh() {
   renderInference();
   renderTuning();
   renderModels();
+  // 카메라 표는 /api/state(모델 목록)와 /api/cameras(담당 카메라) 두 곳에서 온다.
+  // 어느 쪽이 먼저 오든 맞게 보이도록, 상태를 새로 받을 때마다 이미 들고 있는
+  // 카메라로 다시 그린다 — 안 그러면 카메라가 먼저 도착했을 때 체크박스 자리가
+  // '올려 둔 모델이 없습니다' 로 남고 15초 뒤에야 채워진다.
+  if (cameras.length) renderCameras("");
   // 본문 표는 읽기 전용이라 언제 다시 그려도 된다. 편집 중인 모달은 건드리지 않는다 —
   // 3초마다 입력칸이 초기화되면 이름을 적을 수가 없다.
   renderClasses();
@@ -267,6 +272,7 @@ $("upload-btn").onclick = async () => {
 /* ── 카메라별 모델 ─────────────────────────────────────────────────── */
 
 let cameras = [];
+let cameraBusy = false;    // 저장이 오가는 중이면 3초 폴링이 체크를 되돌리지 않게 한다
 
 async function loadCameras() {
   try {
@@ -279,6 +285,9 @@ async function loadCameras() {
 }
 
 function renderCameras(error) {
+  // 저장이 오가는 동안에는 덮어쓰지 않는다. 체크를 누른 직후 폴링이 끼어들면 방금
+  // 누른 칸이 잠깐 원래대로 돌아갔다가 다시 바뀐다 — 눌러도 안 먹는 것처럼 보인다.
+  if (cameraBusy) return;
   const models = (state?.models || []).map((m) => m.name);
   const active = state?.module?.model || "";
 
@@ -298,7 +307,7 @@ function renderCameras(error) {
     const picked = c.models || [];
     // '사용 안 함' 을 모델 목록과 같은 줄에 두되 선으로 가른다. 정반대 뜻이라
     // 나란히 섞어 놓으면 '아무것도 안 고름(=공통)' 과 헷갈린다.
-    const off = `<label class="off">
+    const off = `<label class="off${c.off ? " on" : ""}">
       <input type="checkbox" data-cam="${c.camera_id}" data-off ${c.off ? "checked" : ""} />
       사용 안 함</label><span class="sep"></span>`;
     const boxes = models.length
@@ -345,6 +354,7 @@ async function saveCamera(cameraId) {
   });
 
   msg("camera-msg", "저장 중…");
+  cameraBusy = true;
   try {
     await api(`/api/cameras/${cameraId}/models`, {
       method: "PUT",
@@ -356,11 +366,13 @@ async function saveCamera(cameraId) {
       : picked.length
         ? `카메라 ${cameraId} 는 ${picked.join(", ")} 로 봅니다. 워커가 곧 다시 뜹니다.`
         : `카메라 ${cameraId} 를 공통 모델로 되돌렸습니다.`, "ok");
-    await refresh();
-    await loadCameras();
   } catch (e) {
     msg("camera-msg", e.message, "err");
-    await loadCameras();          // 실패했으면 화면을 서버 값으로 되돌린다
+  } finally {
+    // 성공이든 실패든 서버 값으로 맞춰 다시 그린다. 실패했는데 누른 대로 남아 있으면
+    // 저장된 줄 안다.
+    cameraBusy = false;
+    await Promise.all([refresh(), loadCameras()]);
   }
 }
 
@@ -494,8 +506,14 @@ async function loadSolutions() {
 }
 
 (async () => {
+  // 카메라 표는 상태·탐지항목과 아무 상관이 없으므로 나란히 부른다. 예전에는 주기만
+  // 걸어 두고 첫 호출을 안 해서, 화면을 연 뒤 **첫 15초 동안 표가 비어 있었다** —
+  // setInterval 은 곧바로 한 번 돌지 않는다.
+  const camerasReady = loadCameras();
+  // 탐지 항목이 먼저 있어야 클래스 표의 드롭다운이 첫 그림에서 채워진다.
   await loadSolutions();
-  await refresh();
+  await Promise.all([refresh(), camerasReady]);
+
   setInterval(refresh, 3000);
   // 탐지 항목은 플랫폼에서 가끔 늘어난다. 자주 볼 필요는 없다.
   setInterval(loadSolutions, 30000);
