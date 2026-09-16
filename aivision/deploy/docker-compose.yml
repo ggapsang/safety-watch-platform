@@ -74,6 +74,16 @@ services:
       - "${HLS_PORT:-11885}:8888"
     volumes:
       - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
+      # 시간대 파일. **이것이 없으면 TZ 를 줘도 UTC 로 돈다.**
+      #
+      # 이 이미지는 scratch 기반 단일 레이어라 /usr/share/zoneinfo 가 아예 없다. Go 는
+      # 시간대 DB 를 못 찾으면 오류를 내지 않고 조용히 UTC 로 내려간다 — 그래서 녹화
+      # 파일 이름(recordPath 의 %Y-%m-%d_%H-%M-%S)이 9시간 어긋난 채 쌓였다. 08:00 에
+      # 시작한 녹화가 23:00 으로 적혀, 스케줄이 고장 난 것처럼 보였다(실제로는 멀쩡했다).
+      #
+      # 그래서 Asia/Seoul 파일 하나를 저장소에 두고 붙인다(617바이트). 한국은 1988년
+      # 이후 서머타임이 없어 이 파일은 사실상 바뀌지 않는다.
+      - ./mediamtx/zoneinfo:/usr/share/zoneinfo:ro
       # 녹화를 쌓을 호스트 폴더. .env 의 RECORD_PATH 로 정한다.
       #
       # **기본값을 두지 않는다.** 예전에는 :-recordings 로 내려앉게 해 두었는데, 그러면
