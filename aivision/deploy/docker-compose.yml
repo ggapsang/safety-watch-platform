@@ -170,8 +170,11 @@ services:
   # 기본으로 뜬다. 모델이 없으면 dry-run 으로 내려앉고 화면(11990)에서 모델을 올리면
   # 추론으로 바뀐다 — 꺼 두면 클론한 쪽에서 '모듈이 없다' 로 보인다.
   #
-  # GPU 로 추론하려면 requirements 의 onnxruntime 을 onnxruntime-gpu 로 바꾸고 아래
-  # deploy 블록의 주석을 푼다. provider 가 없으면 알아서 CPU 로 폴백한다.
+  # **GPU 로 추론한다.** 카메라 여섯 대를 CPU 로 돌렸더니 설정한 3fps 가 실제로는
+  # 0.2fps 였고(코어 열 개를 다 쓰고도) 박스가 4~5초에 한 번씩 갱신됐다. CUDA 런타임과
+  # cuDNN 은 onnxruntime-gpu 휠에 들어 있어 호스트에는 드라이버만 있으면 된다.
+  # GPU 가 없는 곳에서는 아래 deploy 블록을 주석 처리하고 requirements 를
+  # onnxruntime 으로 되돌린다.
   mod-yolo:
     build:
       # 컨텍스트가 modules/ 인 이유: 모듈들이 공유하는 _sdk 를 같이 담아야 한다.
@@ -204,7 +207,7 @@ services:
       # 예: {"no_helmet":"ITEM-001","no_vest":"ITEM-002"}  (항목을 먼저 만들어 두세요)
       # (compose 는 기본값 안의 중괄호를 제대로 못 읽으므로 기본값은 비워 둔다.)
       CLASS_MAP: ${YOLO_CLASS_MAP:-}
-      DEVICE: ${YOLO_DEVICE:-cpu}
+      DEVICE: ${YOLO_DEVICE:-cuda}
       IMGSZ: ${YOLO_IMGSZ:-640}
       CONF_THRES: ${YOLO_CONF_THRES:-0.25}
       IOU_THRES: ${YOLO_IOU_THRES:-0.45}
@@ -226,13 +229,17 @@ services:
       # 읽기 전용이 아니다. 호스트 폴더라 파일을 직접 넣고 빼기도 쉽다.
       - ../models:/models
     # GPU 추론을 쓸 때 주석을 푼다. Docker Desktop 은 WSL2 GPU 지원이 켜져 있어야 한다.
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    # GPU 를 넘긴다. 호스트에 NVIDIA 드라이버와 컨테이너 툴킷이 있어야 하고, Docker
+    # Desktop 은 WSL2 GPU 지원이 켜져 있어야 한다. 셋 중 하나라도 없으면 이 블록 때문에
+    # 컨테이너가 아예 안 뜬다 — 그때는 이 블록을 주석 처리하고 requirements 의
+    # onnxruntime-gpu 를 onnxruntime 으로 되돌리면 CPU 로 돈다.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   # 카메라 ONVIF 메타데이터 -> 라이브 박스.
   #
