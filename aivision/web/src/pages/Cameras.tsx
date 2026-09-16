@@ -28,7 +28,7 @@ import {
 } from "../components/ui";
 import { api, ApiError } from "../lib/api";
 import { fmtAgo, fmtHours } from "../lib/format";
-import { useCameras, useClock, useLiveBoxes } from "../lib/hooks";
+import { useCameras, useClock, useLiveBoxes, useViewing } from "../lib/hooks";
 import type { Camera } from "../lib/types";
 
 type Filter = "all" | "normal" | "offline";
@@ -54,6 +54,8 @@ export function Cameras() {
 
   // 고른 카메라. 아직 고르지 않았거나 그 카메라가 사라졌으면 첫 번째를 보여 준다.
   const focusedCam = cameras.find((c) => c.id === focused) ?? cameras[0] ?? null;
+  // 크게 띄운 카메라만 '보는 중'이다. 목록의 작은 칸은 스냅샷이라 추론이 필요 없다.
+  useViewing(focusedCam ? [focusedCam.id] : []);
 
   const shown = cameras.filter((c) =>
     filter === "all" ? true : filter === "normal" ? c.status === "normal" : c.status !== "normal",

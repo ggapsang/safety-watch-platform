@@ -20,7 +20,7 @@ import { LiveVideo } from "../components/LiveVideo";
 import { Card, EmptyRow, Section, Table, Td, cx } from "../components/ui";
 import { api } from "../lib/api";
 import { fmtAgo, fmtShort } from "../lib/format";
-import { useCameras, useClock, useEvents, useLiveBoxes, useSummary } from "../lib/hooks";
+import { useCameras, useClock, useEvents, useLiveBoxes, useSummary, useViewing } from "../lib/hooks";
 import type { SafetyEvent } from "../lib/types";
 
 /** 세로로 쌓이므로 카드가 아니라 가로형으로 만든다(같은 높이에 더 많이 들어간다). */
@@ -76,6 +76,8 @@ export function Dashboard() {
   const { data: cameras = [] } = useCameras();
   const { data: recent } = useEvents({ limit: 10 });
   const liveBoxes = useLiveBoxes();
+  // 크게 띄운 카메라만 '보는 중'이다. 옆 스트립은 스냅샷이라 추론이 필요 없다.
+  useViewing(camId ? [camId] : []);
 
   // 처음 열렸을 때, 또는 보고 있던 카메라가 사라졌을 때 첫 카메라를 고른다.
   useEffect(() => {

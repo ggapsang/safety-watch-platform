@@ -66,6 +66,8 @@ class Config(BaseConfig):
     # class_map(항목 코드)과 층이 다르다 — 이름은 보여 주기용, 코드는 이벤트 승격용이라
     # 하나로 합치면 '이벤트로 안 올리지만 이름은 보고 싶은' 클래스를 표현할 수 없다.
     aliases: dict[str, str] = field(default_factory=dict)
+    # 무엇을 추론할지. "viewing" 이면 지금 화면에 떠 있는 카메라만, "all" 이면 담당 전부.
+    scope: str = "all"
     # 카메라 번호(문자열) -> 그 카메라에만 쓸 모델 파일 이름. 없으면 model_path 를 쓴다.
     # 워커마다 모델이 다를 수 있어 경로 하나로 담을 수 없다 — 표를 넘기고 워커가 고른다.
     camera_models: dict[str, str] = field(default_factory=dict)
@@ -142,6 +144,7 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
             setattr(cfg, name, s.tuning[name])
 
     cfg.stopped = s.stopped
+    cfg.scope = s.scope
     # 카메라별로 다른 모델을 쓸 수 있다. 여기서는 표만 넘기고, 실제로 어느 모델을 열지는
     # 워커가 자기 카메라를 보고 정한다(main.YoloSource.open) — 워커마다 모델이 다르므로
     # 설정 객체 하나에 경로를 담을 수 없다.

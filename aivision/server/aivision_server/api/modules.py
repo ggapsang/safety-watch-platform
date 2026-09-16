@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..services import cleanup
+from ..services import cleanup, viewers
 from ..models import AnalyticsModule, Camera, ModuleAssignment
 from ..schemas import (AssignmentCreate, AssignmentOut, ModuleOut, ModuleRegister,
                        ModuleWork, ModuleWorkItem)
@@ -145,18 +145,22 @@ async def work(module_id: str, session: AsyncSession = Depends(get_session)) -> 
     cams = {c.id: c for c in (await session.execute(
         select(Camera).where(Camera.id.in_(cam_ids)))).scalars().unique().all()}
 
+    seen = viewers.watching()
     items: list[ModuleWorkItem] = []
     for a in module.assignments:
         cam = cams.get(a.camera_id)
         if not a.enabled or cam is None or not cam.enabled:
             continue
         info = manager.stream_info(cam.id)
+        # 지금 누가 이 카메라를 화면에 띄우고 있는지 함께 알린다. 모듈이 '보는 것만
+        # 처리' 를 고르면 이 값으로 판단한다. 계약을 바꾸지 않으려고 options 에 싣는다 —
+        # 모르는 키는 무시하면 되므로 옛 모듈도 그대로 돈다.
         items.append(ModuleWorkItem(
             camera_id=cam.id, camera_name=cam.name, location=cam.location,
             rtsp=getattr(info, "rtsp", "") or "",
             rtsp_sub=getattr(info, "rtsp_sub", "") or "",
             snapshot=f"/api/stream/{cam.id}/snapshot.jpg",
-            options=a.options or {},
+            options={**(a.options or {}), "viewing": cam.id in seen},
         ))
     return ModuleWork(module_id=module_id, items=items)
 

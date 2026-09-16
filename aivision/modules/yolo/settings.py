@@ -88,6 +88,12 @@ class Settings:
     # 열쇠를 문자열로 둔다 — JSON 의 객체 열쇠는 어차피 문자열이라, 숫자로 다루면
     # 저장하고 읽을 때마다 형이 달라진다.
     camera_models: dict[str, str] = field(default_factory=dict)
+    # 무엇을 추론할지. "viewing" 이면 지금 화면에 떠 있는 카메라만, "all" 이면 담당 전부.
+    #
+    # 추론은 비싸다. 카메라를 여섯 대 붙여도 사람이 보고 있는 것은 대개 한두 대인데,
+    # 전부를 같은 속도로 돌리면 자원이 금세 찬다. 다만 화면을 안 보는 동안에도 잡아야
+    # 하는 현장이 있으므로 고를 수 있게 둔다.
+    scope: str = "viewing"
     tuning: dict[str, float] = field(default_factory=dict)
     # 모델 파일 이름 -> 클래스 표. 순서가 곧 클래스 인덱스라 리스트로 둔다.
     models: dict[str, list[ClassRow]] = field(default_factory=dict)
@@ -140,6 +146,7 @@ class Settings:
             "active_model": self.active_model,
             "stopped": self.stopped,
             "camera_models": self.camera_models,
+            "scope": self.scope,
             "tuning": self.tuning,
             "notes": self.notes,
             "models": {m: [r.to_dict() for r in rows] for m, rows in self.models.items()},
@@ -151,6 +158,7 @@ def _parse(data: dict) -> Settings:
     s.active_model = str(data.get("active_model") or "")
     s.stopped = bool(data.get("stopped"))
     s.camera_models = {str(k): str(v) for k, v in (data.get("camera_models") or {}).items() if v}
+    s.scope = "all" if str(data.get("scope") or "") == "all" else "viewing"
     raw_tuning = data.get("tuning") or {}
     for name, (lo, hi) in TUNING.items():
         if name in raw_tuning:

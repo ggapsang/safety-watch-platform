@@ -66,6 +66,17 @@ function maybeClose(): void {
   socket = null;
 }
 
+/** 서버로 한 줄 보낸다. 연결이 없으면 조용히 버린다 —
+ *  이 경로로 오가는 것은 '지금 보고 있는 카메라' 처럼 다음 번에 다시 보내면 되는 값이다. */
+export function send(payload: unknown): void {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  try {
+    socket.send(JSON.stringify(payload));
+  } catch {
+    /* 끊기는 중이다. 재연결 뒤 다시 보낸다 */
+  }
+}
+
 export function subscribe(fn: Listener): () => void {
   listeners.add(fn);
   connect();

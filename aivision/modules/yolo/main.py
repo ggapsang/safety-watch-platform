@@ -58,6 +58,18 @@ class _Base(Source):
         self.sample_fps = max(0.2, float(options.get("sample_fps", cfg.sample_fps)))
         self.interval = 1.0 / self.sample_fps
         self.last_found: dict[str, list[dict]] = {}
+        # 코어가 '지금 이 카메라가 화면에 떠 있나' 를 일감에 실어 준다. 범위가
+        # viewing 이면 그렇지 않은 카메라는 프레임을 읽되 추론을 건너뛴다.
+        #
+        # 워커를 아예 안 띄우지 않는 이유: 그러면 카메라를 바꿀 때마다 RTSP 를 새로
+        # 열어야 해서 박스가 나오기까지 몇 초가 걸린다. 스트림은 붙여 두고 무거운
+        # 것(추론)만 쉬게 한다.
+        self.watching = bool(options.get("viewing", True))
+
+    @property
+    def idle(self) -> bool:
+        """지금 추론을 쉬어야 하나."""
+        return self.cfg.scope == "viewing" and not self.watching
 
 
 class DryRunSource(_Base):
@@ -188,6 +200,17 @@ class YoloSource(_Base):
             ok, frame = cap.read()
             if not ok or frame is None:
                 raise RuntimeError("프레임 읽기 실패")
+
+            if self.idle:
+                # 아무도 안 보는 카메라다. 프레임은 계속 읽어 버퍼가 밀리지 않게 하되
+                # 추론은 건너뛴다. 빈 박스를 내보내 화면의 마지막 박스를 지운다 —
+                # 안 그러면 보다가 다른 카메라로 옮겼을 때 그때 박스가 얼어붙는다.
+                self.last_found = {}
+                yield []
+                if stop.wait(self.interval):
+                    break
+                continue
+
             h, w = frame.shape[:2]
 
             live: list[dict] = []

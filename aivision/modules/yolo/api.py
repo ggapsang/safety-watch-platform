@@ -63,6 +63,10 @@ class CameraModelIn(BaseModel):
     model: str = ""
 
 
+class ScopeIn(BaseModel):
+    scope: str = "all"
+
+
 class NoteIn(BaseModel):
     note: str = ""
 
@@ -126,6 +130,7 @@ def create_app(cfg, runner_status: Callable[[], dict],
                 "model": (cfg.model_path.name
                           if cfg.model_path and cfg.model_path.is_file() else ""),
                 "imgsz": cfg.imgsz, "layout": cfg.layout, "device": cfg.device,
+                "scope": cfg.scope,
             },
             "inference": runner_status(),
             "tuning": {name: getattr(cfg, name) for name in settings_module.TUNING},
@@ -206,6 +211,22 @@ def create_app(cfg, runner_status: Callable[[], dict],
                  size / 1024 / 1024, len(keys), "" if names else " · 이름 없음")
         return JSONResponse({"name": name, "classes": keys,
                              "named": bool(names)}, status_code=201)
+
+    @app.put("/api/scope")
+    async def set_scope(body: ScopeIn) -> JSONResponse:
+        """무엇을 추론할지 — 화면에 떠 있는 것만(viewing) 또는 담당 전부(all).
+
+        viewing 은 자원을 크게 아낀다. 카메라를 여섯 대 붙여도 사람이 보고 있는 것은
+        대개 한두 대다. 대신 화면을 안 보는 동안에는 그 카메라에서 아무 판정도 나오지
+        않는다 — 이벤트를 쌓아야 하는 현장이면 all 로 둔다.
+        """
+        if body.scope not in ("viewing", "all"):
+            raise HTTPException(status_code=400, detail="scope 는 viewing 또는 all 입니다")
+        s = _load()
+        s.scope = body.scope
+        _commit(s)
+        log.info("추론 범위: %s", "화면에 보이는 것만" if s.scope == "viewing" else "담당 전부")
+        return JSONResponse({"scope": s.scope})
 
     @app.get("/api/cameras")
     async def cameras() -> JSONResponse:

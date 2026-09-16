@@ -44,6 +44,7 @@ async function refresh() {
   renderNotice();
   renderInference();
   renderTuning();
+  renderScope();
   renderModels();
   // 본문 표는 읽기 전용이라 언제 다시 그려도 된다. 편집 중인 모달은 건드리지 않는다 —
   // 3초마다 입력칸이 초기화되면 이름을 적을 수가 없다.
@@ -263,6 +264,31 @@ $("upload-btn").onclick = async () => {
     $("upload-btn").disabled = false;
   }
 };
+
+/* ── 추론 범위 ─────────────────────────────────────────────────────── */
+
+function renderScope() {
+  const sel = $("scope");
+  // 손대고 있는 동안에는 덮어쓰지 않는다. 3초마다 되돌아가면 고를 수가 없다.
+  if (document.activeElement === sel) return;
+  sel.value = state?.module?.scope || "all";
+  sel.onchange = async () => {
+    msg("scope-msg", "저장 중…");
+    try {
+      await api("/api/scope", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: sel.value }),
+      });
+      msg("scope-msg", sel.value === "viewing"
+        ? "화면에 보이는 카메라만 추론합니다."
+        : "담당 카메라 전부를 추론합니다.", "ok");
+      refresh();
+    } catch (e) {
+      msg("scope-msg", e.message, "err");
+    }
+  };
+}
 
 /* ── 카메라별 모델 ─────────────────────────────────────────────────── */
 
