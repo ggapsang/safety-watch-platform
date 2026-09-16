@@ -110,6 +110,19 @@
   .msg.ok { color: #2f7a44; } .msg.err { color: var(--error); }
   .muted { color: var(--muted); }
   code { font: 12px ui-monospace, Consolas, monospace; color: var(--body-strong); }
+
+  /* 카메라별 모델 고르기. 드롭다운(multiple)은 ctrl+클릭을 알아야 여러 개를 고를 수
+     있어서 현장에서 못 쓴다 — 체크박스는 보이는 대로 누르면 된다. */
+  .picks { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .picks label {
+    display: inline-flex; align-items: center; gap: 5px;
+    margin: 0; font-size: 12px; cursor: pointer;
+  }
+  .picks input { margin: 0; cursor: pointer; }
+  .picks label.off { font-weight: 600; color: var(--error); }
+  /* '사용 안 함' 과 모델 목록을 눈으로 갈라 둔다. 정반대 뜻이라 섞여 보이면 안 된다. */
+  .picks .sep { width: 1px; align-self: stretch; background: var(--hairline); }
+  .picks.disabled label:not(.off) { opacity: 0.4; }
 </style>
 </head>
 <body>
@@ -174,34 +187,17 @@
       </div>
 
       <div class="card">
-        <h2>추론 범위</h2>
-        <p class="desc">
-          추론은 비쌉니다. 카메라를 여러 대 붙여도 사람이 보고 있는 것은 대개 한두 대입니다.
-        </p>
-        <label>
-          <span>무엇을 추론할까요</span>
-          <select id="scope">
-            <option value="all">담당 카메라 전부 — 화면을 안 봐도 계속 판정합니다</option>
-            <option value="viewing">화면에 보이는 것만 — 자원을 아낍니다</option>
-          </select>
-          <em>
-            <b>화면에 보이는 것만</b> 으로 두면, 아무도 안 보는 카메라에서는 박스도 이벤트도
-            나오지 않습니다. 이벤트를 쌓아야 하는 현장이면 <b>전부</b> 로 두십시오.
-            스트림은 그대로 붙여 두므로 카메라를 바꾸면 곧바로 다시 잡습니다.
-          </em>
-        </label>
-        <div class="msg" id="scope-msg"></div>
-      </div>
-
-      <div class="card">
         <h2>카메라별 모델</h2>
         <p class="desc">
-          카메라마다 다른 모델을 걸 수 있습니다. 출입구는 사람, 작업장은 AMR 처럼 보는 것이
-          다를 때 씁니다. 비워 두면 위에서 <b>사용</b> 으로 고른 공통 모델을 씁니다.<br />
+          카메라마다 무엇으로 볼지 정합니다. 출입구는 사람, 작업장은 AMR 처럼 보는 것이
+          다를 때, 또는 한 자리에서 둘 다 봐야 할 때 씁니다.<br />
+          아무것도 고르지 않으면 위에서 <b>사용</b> 으로 고른 공통 모델을 씁니다.
+          <b>사용 안 함</b> 으로 두면 그 카메라는 영상도 열지 않습니다 — 추론은 카메라
+          수에 정비례해 비싸므로, 안 볼 곳을 꺼 두는 것이 가장 확실하게 아끼는 방법입니다.<br />
           담당 카메라는 플랫폼에서 정합니다 — 플러그인 탭 위쪽의 '이 플러그인이 볼 카메라'.
         </p>
         <table>
-          <thead><tr><th>카메라</th><th>설치 위치</th><th>쓸 모델</th></tr></thead>
+          <thead><tr><th>카메라</th><th>설치 위치</th><th>쓸 모델</th><th>지금</th></tr></thead>
           <tbody id="camera-rows"></tbody>
         </table>
         <div class="msg" id="camera-msg"></div>

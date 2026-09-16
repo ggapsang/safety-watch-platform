@@ -38,6 +38,9 @@ WEB = Path(__file__).resolve().parent / "web"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # 업로드 상한. 이보다 큰 YOLO ONNX 는 흔치 않고, 상한이 없으면 디스크가 조용히 찬다.
 MAX_UPLOAD_MB = 512
+# 한 카메라에 걸 수 있는 모델 수. 모델마다 ONNX 세션과 추론 한 번이 더 붙고, 그것이
+# 카메라 수와 곱해진다 — 상한이 없으면 화면에서 클릭 몇 번으로 GPU 를 재울 수 있다.
+MAX_MODELS_PER_CAMERA = 4
 
 
 class ClassRowIn(BaseModel):
@@ -59,12 +62,9 @@ class TuningIn(BaseModel):
     sample_fps: float | None = None
 
 
-class CameraModelIn(BaseModel):
-    model: str = ""
-
-
-class ScopeIn(BaseModel):
-    scope: str = "all"
+class CameraModelsIn(BaseModel):
+    models: list[str] = []
+    off: bool = False
 
 
 class NoteIn(BaseModel):
@@ -130,7 +130,6 @@ def create_app(cfg, runner_status: Callable[[], dict],
                 "model": (cfg.model_path.name
                           if cfg.model_path and cfg.model_path.is_file() else ""),
                 "imgsz": cfg.imgsz, "layout": cfg.layout, "device": cfg.device,
-                "scope": cfg.scope,
             },
             "inference": runner_status(),
             "tuning": {name: getattr(cfg, name) for name in settings_module.TUNING},
@@ -212,22 +211,6 @@ def create_app(cfg, runner_status: Callable[[], dict],
         return JSONResponse({"name": name, "classes": keys,
                              "named": bool(names)}, status_code=201)
 
-    @app.put("/api/scope")
-    async def set_scope(body: ScopeIn) -> JSONResponse:
-        """무엇을 추론할지 — 화면에 떠 있는 것만(viewing) 또는 담당 전부(all).
-
-        viewing 은 자원을 크게 아낀다. 카메라를 여섯 대 붙여도 사람이 보고 있는 것은
-        대개 한두 대다. 대신 화면을 안 보는 동안에는 그 카메라에서 아무 판정도 나오지
-        않는다 — 이벤트를 쌓아야 하는 현장이면 all 로 둔다.
-        """
-        if body.scope not in ("viewing", "all"):
-            raise HTTPException(status_code=400, detail="scope 는 viewing 또는 all 입니다")
-        s = _load()
-        s.scope = body.scope
-        _commit(s)
-        log.info("추론 범위: %s", "화면에 보이는 것만" if s.scope == "viewing" else "담당 전부")
-        return JSONResponse({"scope": s.scope})
-
     @app.get("/api/cameras")
     async def cameras() -> JSONResponse:
         """이 모듈이 담당하는 카메라와, 각 카메라에 걸린 모델.
@@ -249,29 +232,60 @@ def create_app(cfg, runner_status: Callable[[], dict],
             return JSONResponse({"items": [], "error": "플랫폼에 연결하지 못했습니다"})
 
         active = cfg.model_path.name if cfg.model_path else ""
-        return JSONResponse({"items": [
-            {"camera_id": w.get("camera_id"),
-             "name": w.get("camera_name") or "",
-             "location": w.get("location") or "",
-             # 비어 있으면 공통 모델을 쓴다는 뜻이다. 화면이 그것을 '(공통)' 으로 보인다.
-             "model": s.camera_models.get(str(w.get("camera_id")), ""),
-             "effective": s.camera_models.get(str(w.get("camera_id")), "") or active}
-            for w in (work.get("items") or [])
-        ], "active_model": active})
 
-    @app.put("/api/cameras/{camera_id}/model")
-    async def set_camera_model(camera_id: int, body: CameraModelIn) -> JSONResponse:
-        """이 카메라에만 쓸 모델을 정한다. 비우면 공통 모델로 되돌린다."""
-        name = (body.model or "").strip()
+        def row(w: dict) -> dict:
+            key = str(w.get("camera_id"))
+            picked = s.camera_models.get(key, [])
+            off = key in s.camera_off
+            return {
+                "camera_id": w.get("camera_id"),
+                "name": w.get("camera_name") or "",
+                "location": w.get("location") or "",
+                # 비면 공통 모델을 쓴다는 뜻이다. 화면이 그것을 '(공통)' 으로 보인다.
+                "models": picked,
+                "off": off,
+                # 실제로 돌아가는 모델. 세 상태(끔·공통·직접 고름)를 화면이 매번 다시
+                # 계산하지 않게 여기서 한 번만 정한다.
+                "effective": [] if off else (picked or ([active] if active else [])),
+            }
+
+        return JSONResponse({"items": [row(w) for w in (work.get("items") or [])],
+                             "active_model": active})
+
+    @app.put("/api/cameras/{camera_id}/models")
+    async def set_camera_models(camera_id: int, body: CameraModelsIn) -> JSONResponse:
+        """이 카메라에 걸 모델들을 정한다.
+
+        세 상태가 있다. `off` 면 이 카메라는 추론하지 않는다(영상도 안 연다). 목록이
+        비어 있으면 공통 모델을 쓴다. 이름을 골랐으면 그 모델들을 **모두** 돌린다.
+
+        '비움' 을 '끔' 으로 쓰지 않는 이유는 settings.Settings.camera_off 주석에 있다 —
+        정반대인 두 뜻을 한 칸에 담을 수 없다.
+        """
+        names = list(dict.fromkeys(body.models))       # 순서는 지키고 중복만 없앤다
+        if len(names) > MAX_MODELS_PER_CAMERA:
+            # 개수를 파일 확인보다 먼저 본다. 뒤에 두면 다섯 개를 보냈을 때 '첫 번째
+            # 모델을 못 찾겠다' 는 엉뚱한 이유가 돌아간다.
+            raise HTTPException(
+                status_code=400,
+                detail=f"한 카메라에 모델은 {MAX_MODELS_PER_CAMERA}개까지 걸 수 있습니다")
+        for name in names:
+            _model_file(name)                          # 없는 모델이면 여기서 404
+
         s = _load()
-        if name:
-            _model_file(name)                 # 없는 모델이면 여기서 404
-            s.camera_models[str(camera_id)] = name
+        key = str(camera_id)
+        if body.off:
+            s.camera_off.add(key)
         else:
-            s.camera_models.pop(str(camera_id), None)
+            s.camera_off.discard(key)
+        if names:
+            s.camera_models[key] = names
+        else:
+            s.camera_models.pop(key, None)
         _commit(s)
-        log.info("카메라 %d 모델: %s", camera_id, name or "(공통)")
-        return JSONResponse({"camera_id": camera_id, "model": name})
+        log.info("카메라 %d: %s", camera_id,
+                 "사용 안 함" if body.off else (", ".join(names) or "(공통)"))
+        return JSONResponse({"camera_id": camera_id, "models": names, "off": body.off})
 
     @app.post("/api/models/{name}/use")
     async def use_model(name: str) -> JSONResponse:
@@ -330,11 +344,19 @@ def create_app(cfg, runner_status: Callable[[], dict],
                                        "먼저 '사용 중단' 하거나 다른 모델을 적용하세요.")
         path.unlink()
         s.models.pop(name, None)
-        # 이 모델을 걸어 둔 카메라가 있으면 함께 푼다. 안 그러면 없는 파일을 가리킨 채
-        # 남아, 그 카메라만 조용히 멈춘다.
-        for cam in [k for k, v in s.camera_models.items() if v == name]:
-            s.camera_models.pop(cam, None)
-            log.info("카메라 %s 의 모델 지정을 풉니다 (모델 삭제)", cam)
+        # 이 모델을 걸어 둔 카메라가 있으면 거기서만 뺀다. 안 그러면 없는 파일을 가리킨 채
+        # 남아, 그 카메라만 조용히 멈춘다. 같이 걸어 둔 다른 모델은 그대로 둔다 —
+        # 하나를 지웠다고 그 카메라가 통째로 눈을 감으면 안 된다.
+        for cam, names in list(s.camera_models.items()):
+            if name not in names:
+                continue
+            rest = [n for n in names if n != name]
+            if rest:
+                s.camera_models[cam] = rest
+            else:
+                s.camera_models.pop(cam, None)
+            log.info("카메라 %s 에서 %s 지정을 풉니다 (모델 삭제) — 남은 모델: %s",
+                     cam, name, ", ".join(rest) or "(공통)")
         s.notes.pop(name, None)
         settings_module.save(models_dir, s)
         log.info("모델 삭제: %s", name)

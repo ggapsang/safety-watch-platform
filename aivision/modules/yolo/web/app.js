@@ -44,7 +44,6 @@ async function refresh() {
   renderNotice();
   renderInference();
   renderTuning();
-  renderScope();
   renderModels();
   // 본문 표는 읽기 전용이라 언제 다시 그려도 된다. 편집 중인 모달은 건드리지 않는다 —
   // 3초마다 입력칸이 초기화되면 이름을 적을 수가 없다.
@@ -265,31 +264,6 @@ $("upload-btn").onclick = async () => {
   }
 };
 
-/* ── 추론 범위 ─────────────────────────────────────────────────────── */
-
-function renderScope() {
-  const sel = $("scope");
-  // 손대고 있는 동안에는 덮어쓰지 않는다. 3초마다 되돌아가면 고를 수가 없다.
-  if (document.activeElement === sel) return;
-  sel.value = state?.module?.scope || "all";
-  sel.onchange = async () => {
-    msg("scope-msg", "저장 중…");
-    try {
-      await api("/api/scope", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scope: sel.value }),
-      });
-      msg("scope-msg", sel.value === "viewing"
-        ? "화면에 보이는 카메라만 추론합니다."
-        : "담당 카메라 전부를 추론합니다.", "ok");
-      refresh();
-    } catch (e) {
-      msg("scope-msg", e.message, "err");
-    }
-  };
-}
-
 /* ── 카메라별 모델 ─────────────────────────────────────────────────── */
 
 let cameras = [];
@@ -310,48 +284,83 @@ function renderCameras(error) {
 
   if (error) {
     $("camera-rows").innerHTML =
-      `<tr><td colspan="3" class="muted">${esc(error)}</td></tr>`;
+      `<tr><td colspan="4" class="muted">${esc(error)}</td></tr>`;
     return;
   }
   if (!cameras.length) {
     $("camera-rows").innerHTML =
-      `<tr><td colspan="3" class="muted">담당 카메라가 없습니다.
+      `<tr><td colspan="4" class="muted">담당 카메라가 없습니다.
          플랫폼(플러그인 탭 위쪽)에서 이 모듈에 카메라를 할당하세요.</td></tr>`;
     return;
   }
 
   $("camera-rows").innerHTML = cameras.map((c) => {
-    const opts = [`<option value=""${c.model ? "" : " selected"}>(공통 — ${esc(active || "없음")})</option>`]
-      .concat(models.map((m) =>
-        `<option value="${esc(m)}"${m === c.model ? " selected" : ""}>${esc(m)}</option>`))
-      .join("");
+    const picked = c.models || [];
+    // '사용 안 함' 을 모델 목록과 같은 줄에 두되 선으로 가른다. 정반대 뜻이라
+    // 나란히 섞어 놓으면 '아무것도 안 고름(=공통)' 과 헷갈린다.
+    const off = `<label class="off">
+      <input type="checkbox" data-cam="${c.camera_id}" data-off ${c.off ? "checked" : ""} />
+      사용 안 함</label><span class="sep"></span>`;
+    const boxes = models.length
+      ? models.map((m) => `<label>
+          <input type="checkbox" data-cam="${c.camera_id}" value="${esc(m)}"
+                 ${picked.includes(m) ? "checked" : ""} ${c.off ? "disabled" : ""} />
+          ${esc(m)}</label>`).join("")
+      : `<span class="muted">올려 둔 모델이 없습니다</span>`;
     return `<tr>
       <td><b>${esc(c.name || c.camera_id)}</b></td>
       <td class="muted">${esc(c.location)}</td>
-      <td><select data-cam="${c.camera_id}">${opts}</select></td>
+      <td><div class="picks${c.off ? " disabled" : ""}">${off}${boxes}</div></td>
+      <td>${effectiveLabel(c, active)}</td>
     </tr>`;
   }).join("");
 
-  $("camera-rows").querySelectorAll("[data-cam]").forEach((sel) => {
-    sel.onchange = () => saveCameraModel(sel.dataset.cam, sel.value);
+  $("camera-rows").querySelectorAll("input[data-cam]").forEach((box) => {
+    box.onchange = () => saveCamera(box.dataset.cam);
   });
 }
 
-async function saveCameraModel(cameraId, model) {
+/** 지금 이 카메라에서 실제로 도는 것. 세 상태를 한눈에 구분되게 쓴다. */
+function effectiveLabel(c, active) {
+  if (c.off) return `<span class="pill unknown">꺼짐</span>`;
+  const running = c.effective || [];
+  if (!running.length) return `<span class="muted">모델 없음</span>`;
+  // 직접 고른 것인지 공통 모델이 내려온 것인지 표시해 둔다. 값만 보이면 위에서
+  // '사용' 모델을 바꿨을 때 이 카메라가 왜 따라 바뀌는지 알 수 없다.
+  const how = (c.models || []).length ? "" : ` <span class="muted">(공통)</span>`;
+  return `<span class="pill on">${esc(running.join(" + "))}</span>${how}`;
+}
+
+/** 그 카메라 행의 체크박스를 모아 한 번에 저장한다.
+ *
+ * 체크 하나마다 보내지 않는다 — 서버가 '이 카메라의 모델은 이것들' 을 통째로 받게 해야
+ * 더하기/빼기 순서에 따라 결과가 달라지는 일이 없다. */
+async function saveCamera(cameraId) {
+  const row = $("camera-rows").querySelectorAll(`input[data-cam="${cameraId}"]`);
+  let off = false;
+  const picked = [];
+  row.forEach((box) => {
+    if (box.dataset.off !== undefined) off = box.checked;
+    else if (box.checked) picked.push(box.value);
+  });
+
   msg("camera-msg", "저장 중…");
   try {
-    await api(`/api/cameras/${cameraId}/model`, {
+    await api(`/api/cameras/${cameraId}/models`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model }),
+      body: JSON.stringify({ models: picked, off }),
     });
     msg("camera-msg",
-      model ? `카메라 ${cameraId} 는 ${model} 로 봅니다. 워커가 곧 다시 뜹니다.`
-            : `카메라 ${cameraId} 를 공통 모델로 되돌렸습니다.`, "ok");
+      off ? `카메라 ${cameraId} 는 추론하지 않습니다. 영상도 열지 않습니다.`
+      : picked.length
+        ? `카메라 ${cameraId} 는 ${picked.join(", ")} 로 봅니다. 워커가 곧 다시 뜹니다.`
+        : `카메라 ${cameraId} 를 공통 모델로 되돌렸습니다.`, "ok");
     await refresh();
     await loadCameras();
   } catch (e) {
     msg("camera-msg", e.message, "err");
+    await loadCameras();          // 실패했으면 화면을 서버 값으로 되돌린다
   }
 }
 

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api, type EventQuery } from "./api";
-import { send, subscribe, subscribeState, type LiveState } from "./live";
+import { subscribe, subscribeState, type LiveState } from "./live";
 import type { Box, Bucket, PushMessage } from "./types";
 
 /* ────────────────────────────────────────────────── 데이터 조회 */
@@ -139,30 +139,6 @@ export function useLiveBoxes(ttlMs = 2000): Record<number, Box[]> {
     }
     return merged;
   }, [layers]);
-}
-
-/**
- * 지금 화면에 띄우고 있는 카메라를 서버에 알린다.
- *
- * 추론은 비싸다. 카메라를 여섯 대 붙여 놓아도 화면에 떠 있는 것은 대개 한두 대인데,
- * 모듈이 전부를 같은 속도로 돌면 자원이 금세 찬다. 서버가 이 값을 일감(`/work`)의
- * `options.viewing` 으로 모듈에 넘겨, 모듈이 '보는 것만' 을 고를 수 있게 한다.
- *
- * 주기적으로 다시 보낸다. 탭을 닫을 때 '이제 안 봅니다' 를 보낼 방법이 없어서, 서버는
- * **소식이 끊기는 것**으로 판단한다(services/viewers.py). 끝을 알리는 신호에 기대면
- * 언젠가 영원히 보는 중인 카메라가 남는다.
- */
-export function useViewing(cameraIds: number[]): void {
-  // 값이 같아도 배열은 매번 새로 오므로, 내용으로 비교해 effect 가 헛돌지 않게 한다.
-  const key = [...cameraIds].sort((a, b) => a - b).join(",");
-
-  useEffect(() => {
-    const ids = key ? key.split(",").map(Number) : [];
-    const tell = () => send({ kind: "viewing", camera_ids: ids });
-    tell();                                   // 화면을 열거나 카메라를 바꾸면 즉시
-    const id = window.setInterval(tell, 5000);
-    return () => window.clearInterval(id);
-  }, [key]);
 }
 
 /** 1초마다 갱신되는 현재 시각(헤더 시계). */

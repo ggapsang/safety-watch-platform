@@ -66,19 +66,25 @@ class Config(BaseConfig):
     # class_map(항목 코드)과 층이 다르다 — 이름은 보여 주기용, 코드는 이벤트 승격용이라
     # 하나로 합치면 '이벤트로 안 올리지만 이름은 보고 싶은' 클래스를 표현할 수 없다.
     aliases: dict[str, str] = field(default_factory=dict)
-    # 무엇을 추론할지. "viewing" 이면 지금 화면에 떠 있는 카메라만, "all" 이면 담당 전부.
-    scope: str = "all"
-    # 카메라 번호(문자열) -> 그 카메라에만 쓸 모델 파일 이름. 없으면 model_path 를 쓴다.
+    # 카메라 번호(문자열) -> 그 카메라에 걸 모델 파일 이름들. 비면 model_path 를 쓴다.
     # 워커마다 모델이 다를 수 있어 경로 하나로 담을 수 없다 — 표를 넘기고 워커가 고른다.
-    camera_models: dict[str, str] = field(default_factory=dict)
+    camera_models: dict[str, list[str]] = field(default_factory=dict)
+    # 추론을 꺼 둔 카메라 번호(문자열). 이 카메라는 영상도 열지 않는다.
+    camera_off: set[str] = field(default_factory=set)
 
     # 모델 이름 -> (class_map, aliases). 카메라별 모델을 쓸 때 각자의 표를 찾는 자리다.
     model_maps: dict[str, tuple[dict[str, str], dict[str, str]]] = field(default_factory=dict)
 
-    def model_for(self, camera_id: int) -> Path | None:
-        """이 카메라가 열 모델. 지정이 없으면 공통 모델."""
-        name = self.camera_models.get(str(camera_id))
-        return (Path(self.models_dir) / name) if name else self.model_path
+    def is_off(self, camera_id: int) -> bool:
+        """이 카메라는 추론하지 않기로 했나."""
+        return str(camera_id) in self.camera_off
+
+    def models_for(self, camera_id: int) -> list[Path]:
+        """이 카메라가 열 모델들. 지정이 없으면 공통 모델 하나."""
+        names = self.camera_models.get(str(camera_id)) or []
+        if names:
+            return [Path(self.models_dir) / n for n in names]
+        return [self.model_path] if self.model_path else []
 
     def maps_for(self, model_name: str) -> tuple[dict[str, str], dict[str, str]]:
         """그 모델의 (항목 코드 표, 표시 이름 표).
@@ -144,16 +150,22 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
             setattr(cfg, name, s.tuning[name])
 
     cfg.stopped = s.stopped
-    cfg.scope = s.scope
-    # 카메라별로 다른 모델을 쓸 수 있다. 여기서는 표만 넘기고, 실제로 어느 모델을 열지는
-    # 워커가 자기 카메라를 보고 정한다(main.YoloSource.open) — 워커마다 모델이 다르므로
-    # 설정 객체 하나에 경로를 담을 수 없다.
-    cfg.camera_models = {k: v for k, v in s.camera_models.items()
-                         if (Path(cfg.models_dir) / v).is_file()}
-    dropped = set(s.camera_models) - set(cfg.camera_models)
+    cfg.camera_off = set(s.camera_off)
+    # 카메라마다 다른 모델을, 여러 개까지 쓸 수 있다. 여기서는 표만 넘기고, 실제로 어느
+    # 모델을 열지는 워커가 자기 카메라를 보고 정한다(main.YoloSource.open) — 워커마다
+    # 모델이 다르므로 설정 객체 하나에 경로를 담을 수 없다.
+    cfg.camera_models = {}
+    dropped: list[str] = []
+    for cam, names in s.camera_models.items():
+        keep = [n for n in names if (Path(cfg.models_dir) / n).is_file()]
+        dropped += [f"{cam}->{n}" for n in names if n not in keep]
+        if keep:
+            cfg.camera_models[cam] = keep
     if dropped:
+        # 지정만 남고 파일이 사라진 경우다. 그 카메라를 멈추지 않고 남은 모델로 돈다 —
+        # 모델 하나가 없어졌다고 카메라가 통째로 눈을 감으면 더 나쁘다.
         log.warning("카메라별 모델 지정 중 파일이 없는 것을 건너뜁니다: %s",
-                    ", ".join(f"{k}->{s.camera_models[k]}" for k in sorted(dropped)))
+                    ", ".join(sorted(dropped)))
 
     if s.active_model:
         candidate = Path(cfg.models_dir) / s.active_model

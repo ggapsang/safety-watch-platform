@@ -58,18 +58,6 @@ class _Base(Source):
         self.sample_fps = max(0.2, float(options.get("sample_fps", cfg.sample_fps)))
         self.interval = 1.0 / self.sample_fps
         self.last_found: dict[str, list[dict]] = {}
-        # 코어가 '지금 이 카메라가 화면에 떠 있나' 를 일감에 실어 준다. 범위가
-        # viewing 이면 그렇지 않은 카메라는 프레임을 읽되 추론을 건너뛴다.
-        #
-        # 워커를 아예 안 띄우지 않는 이유: 그러면 카메라를 바꿀 때마다 RTSP 를 새로
-        # 열어야 해서 박스가 나오기까지 몇 초가 걸린다. 스트림은 붙여 두고 무거운
-        # 것(추론)만 쉬게 한다.
-        self.watching = bool(options.get("viewing", True))
-
-    @property
-    def idle(self) -> bool:
-        """지금 추론을 쉬어야 하나."""
-        return self.cfg.scope == "viewing" and not self.watching
 
 
 class DryRunSource(_Base):
@@ -132,41 +120,65 @@ class StoppedSource(_Base):
         yield                                   # 제너레이터임을 알리는 도달 불가 구문
 
 
+class DisabledSource(StoppedSource):
+    """이 카메라 하나만 꺼 둔 상태.
+
+    전체 중단(StoppedSource)과 뜻이 다르다 — 저쪽은 모듈 전체를 세운 것이고, 이쪽은
+    담당 카메라 중 이 한 대만 안 본다는 결정이다. 화면과 로그에서 구별되어야 '왜 이
+    카메라만 조용한가' 를 묻지 않는다.
+
+    영상도 열지 않는다. 모델도 안 연다 — 안 쓸 카메라 때문에 RTSP 연결과 ONNX 세션을
+    붙들고 있으면 끈 의미가 없다.
+    """
+
+    @property
+    def device(self) -> str:
+        return "사용 안 함"
+
+
 class YoloSource(_Base):
     """RTSP 프레임을 솎아 추론한다. 모델은 워커 스레드마다 따로 연다."""
 
     def __init__(self, cfg, item: WorkItem) -> None:
         super().__init__(cfg, item)
-        self.model = None
+        # (모델, 표시 이름 표) 쌍들. 한 카메라에 모델을 여러 개 걸 수 있다.
+        self.engines: list[tuple] = []
         self.cap = None
-        # open() 에서 이 카메라의 모델을 정하며 함께 채운다. 그 전에도 boxes() 가
-        # 참조할 수 있으므로 공통 표로 시작한다.
-        self.class_map = cfg.class_map
-        self.aliases = cfg.aliases
 
     @property
     def device(self) -> str:
-        return getattr(self.model, "device", "-") if self.model else "-"
+        if not self.engines:
+            return "-"
+        dev = self.engines[0][0].device
+        # 여러 개면 몇 개인지까지 보여 준다. 장치 이름만 보이면 한 대에 둘을 걸어 둔
+        # 것이 화면 어디에도 안 나타난다.
+        return dev if len(self.engines) == 1 else f"{dev} × {len(self.engines)}"
 
     def open(self, item: WorkItem) -> None:
         import cv2
         import inference
 
-        if self.model is None:
-            # 카메라마다 다른 모델을 쓸 수 있다. 한 현장에서도 출입구는 사람, 작업장은
-            # AMR 을 봐야 하는데 모델 하나를 전부에 걸면 둘 중 하나는 늘 헛돈다.
-            path = self.cfg.model_for(item.camera_id)
-            if path is None or not path.is_file():
-                raise RuntimeError(f"모델 파일이 없습니다: {path}")
-            # 클래스 표도 모델별이다. 공통 모델의 표를 다른 모델에 씌우면 라벨과 항목이
-            # 엉뚱하게 붙는다 — 인덱스는 맞는데 뜻이 다른, 가장 찾기 어려운 고장이다.
-            self.class_map, self.aliases = self.cfg.maps_for(path.name)
-            self.model = inference.load(path, self.cfg.device,
-                                        self.cfg.imgsz, self.cfg.conf_thres,
-                                        self.cfg.iou_thres, self.class_map,
-                                        self.cfg.layout)
-            if path != self.cfg.model_path:
-                log.info("카메라 %d 전용 모델: %s", item.camera_id, path.name)
+        if not self.engines:
+            # 카메라마다 다른 모델을, 여러 개까지 쓸 수 있다. 한 현장에서도 출입구는
+            # 사람, 작업장은 AMR 을 봐야 하는데 모델 하나를 전부에 걸면 둘 중 하나는 늘
+            # 헛돈다. 그리고 출입구처럼 둘 다 봐야 하는 자리가 있다.
+            paths = self.cfg.models_for(item.camera_id)
+            if not paths:
+                raise RuntimeError("이 카메라에 걸린 모델이 없습니다")
+            for path in paths:
+                if not path.is_file():
+                    raise RuntimeError(f"모델 파일이 없습니다: {path}")
+                # 클래스 표도 모델별이다. 한 모델의 표를 다른 모델에 씌우면 라벨과 항목이
+                # 엉뚱하게 붙는다 — 인덱스는 맞는데 뜻이 다른, 가장 찾기 어려운 고장이다.
+                class_map, aliases = self.cfg.maps_for(path.name)
+                self.engines.append((
+                    inference.load(path, self.cfg.device, self.cfg.imgsz,
+                                   self.cfg.conf_thres, self.cfg.iou_thres,
+                                   class_map, self.cfg.layout),
+                    aliases))
+            if self.cfg.camera_models.get(str(item.camera_id)):
+                log.info("카메라 %d 전용 모델: %s", item.camera_id,
+                         ", ".join(p.name for p in paths))
         # 저화질이 있으면 그것을 쓴다. 모델 입력이 640 이라 4K 를 풀어 놓고 다시 줄이는
         # 것은 CPU 를 그냥 버리는 일이다. 없으면 원본으로 내려간다.
         url = item.stream_for(prefer_sub=self.cfg.prefer_sub_stream)
@@ -188,49 +200,43 @@ class YoloSource(_Base):
             cap.release()
 
     def boxes(self, item: WorkItem, stop: threading.Event) -> Iterator[list[dict]]:
-        cap, model = self.cap, self.model
-        if cap is None or model is None:
+        cap = self.cap
+        if cap is None or not self.engines:
             raise RuntimeError("스트림이 열리지 않았습니다")
         min_px = self.cfg.min_box_px
-        # 이 워커가 연 모델의 표를 쓴다(open 에서 정해 둔다). cfg 의 공통 표를 쓰면
+        # 이 워커가 연 모델들의 표를 쓴다(open 에서 정해 둔다). cfg 의 공통 표를 쓰면
         # 카메라별 모델을 걸었을 때 다른 모델의 이름이 붙는다.
-        aliases = self.aliases
+        engines = self.engines
 
         while not stop.is_set():
             ok, frame = cap.read()
             if not ok or frame is None:
                 raise RuntimeError("프레임 읽기 실패")
 
-            if self.idle:
-                # 아무도 안 보는 카메라다. 프레임은 계속 읽어 버퍼가 밀리지 않게 하되
-                # 추론은 건너뛴다. 빈 박스를 내보내 화면의 마지막 박스를 지운다 —
-                # 안 그러면 보다가 다른 카메라로 옮겼을 때 그때 박스가 얼어붙는다.
-                self.last_found = {}
-                yield []
-                if stop.wait(self.interval):
-                    break
-                continue
-
             h, w = frame.shape[:2]
 
             live: list[dict] = []
             found: dict[str, list[dict]] = {}
-            for det in model.infer(frame):
-                if min_px and _short_side_px(det, w, h) < min_px:
-                    # 작은 이물질(볼트·나사류)을 무시하고 싶을 때 쓴다. 학습 라벨에서
-                    # 빼는 것보다 여기서 거르는 편이 낫다 — 사내 실험에서 라벨을 지우면
-                    # 감독이 모순되어 큰 목표의 성능까지 떨어졌다(mAP 0.851 -> 0.737).
-                    continue
-                box = det.to_box()
-                # 사람이 붙인 이름이 있으면 그것을 그린다. 없으면 모델이 들고 온 이름,
-                # 그것도 없으면 인덱스다(inference.Model.class_name).
-                box["label"] = aliases.get(box["label"], box["label"])
-                live.append(box)
-                code = model.item_code(det.cls)
-                if code:                               # 연결되지 않은 클래스는 박스만 그린다
-                    # 이벤트에 붙는 박스도 같은 이름을 쓴다. 예전에는 항목 코드를 넣어
-                    # 이벤트 상세창에 'ITEM-001' 이 그려졌다 — 사람이 읽을 것이 아니다.
-                    found.setdefault(code, []).append(dict(box))
+            # 한 프레임을 모델마다 한 번씩 본다. 결과는 그냥 합친다 — 모델끼리 겹치는
+            # 박스를 지우지 않는다. 서로 다른 것을 찾으라고 두 모델을 건 것인데 임의로
+            # 합쳐 버리면, 왜 한쪽 판정이 사라졌는지 화면에서 알 길이 없다.
+            for model, aliases in engines:
+                for det in model.infer(frame):
+                    if min_px and _short_side_px(det, w, h) < min_px:
+                        # 작은 이물질(볼트·나사류)을 무시하고 싶을 때 쓴다. 학습 라벨에서
+                        # 빼는 것보다 여기서 거르는 편이 낫다 — 사내 실험에서 라벨을 지우면
+                        # 감독이 모순되어 큰 목표의 성능까지 떨어졌다(mAP 0.851 -> 0.737).
+                        continue
+                    box = det.to_box()
+                    # 사람이 붙인 이름이 있으면 그것을 그린다. 없으면 모델이 들고 온 이름,
+                    # 그것도 없으면 인덱스다(inference.Model.class_name).
+                    box["label"] = aliases.get(box["label"], box["label"])
+                    live.append(box)
+                    code = model.item_code(det.cls)
+                    if code:                           # 연결되지 않은 클래스는 박스만 그린다
+                        # 이벤트에 붙는 박스도 같은 이름을 쓴다. 예전에는 항목 코드를 넣어
+                        # 이벤트 상세창에 'ITEM-001' 이 그려졌다 — 사람이 읽을 것이 아니다.
+                        found.setdefault(code, []).append(dict(box))
             self.last_found = found
             yield live
 
@@ -271,14 +277,19 @@ def _emit(worker, transitions) -> None:
 
 # ────────────────────────────────────────────────────────────── 기동
 
-def _pick_source(cfg):
-    """설정 상태 -> 워커가 쓸 소스. 세 상태를 한곳에서 가른다.
+def _pick_source(cfg, item: WorkItem):
+    """설정 상태 -> 이 카메라의 워커가 쓸 소스. 네 상태를 한곳에서 가른다.
+
+    카메라마다 다르게 갈린다. 모듈은 돌고 있는데 이 카메라만 꺼 둔 경우가 있어서, 모듈
+    전체 상태만 보고 정할 수 없다.
 
     화면과 로그가 같은 말을 하도록 _mode() 와 짝을 맞춰 둔다 — 갈라 두면 '화면은 추론인데
     실제로는 dry-run' 같은 어긋남이 생긴다.
     """
     if cfg.stopped:
         return StoppedSource
+    if cfg.is_off(item.camera_id):
+        return DisabledSource
     return DryRunSource if cfg.dry_run else YoloSource
 
 
@@ -295,14 +306,14 @@ def main(argv: list[str]) -> int:
         cfg.dry_run = True
     serve = "--no-serve" not in argv
 
-    # 리스트에 담는 이유: 화면에서 모델을 올리면 dry-run -> 추론으로 갈아타야 하는데,
-    # 이름에 그냥 묶어 두면 Runner 가 들고 있는 람다가 옛 값을 계속 본다.
-    make_source = [_pick_source(cfg)]
     log.info("모듈 %s 기동 (%s)", cfg.module_id, _mode(cfg))
 
     runner = Runner(
         cfg,
-        make_source=lambda item: make_source[0](cfg, item),
+        # 소스 종류를 워커를 만드는 **그 순간에** 고른다. 미리 골라 두면 화면에서 모델을
+        # 올리거나 카메라를 꺼도 Runner 가 들고 있는 값이 옛것이라 반영되지 않는다.
+        # cfg 는 apply_settings 가 같은 객체를 고쳐 쓰므로 여기서 읽으면 늘 최신이다.
+        make_source=lambda item: _pick_source(cfg, item)(cfg, item),
         on_boxes=on_boxes,
         on_stream_end=on_stream_end,
         # 플랫폼이 이 주소를 탭으로 감싸 보여 준다. 브라우저가 닿는 주소여야 하므로
@@ -330,7 +341,6 @@ def main(argv: list[str]) -> int:
         다음 폴링에서 되살리는데, 그때 make_source 가 갱신된 cfg 를 읽는다. 여기서
         따로 만들면 워커 생성 경로가 둘이 되고, 일감 목록과 어긋날 수 있다.
         """
-        make_source[0] = _pick_source(cfg)
         for w in list(runner.workers.values()):
             w.stop()
         log.info("설정이 바뀌어 워커를 다시 띄웁니다 (%d대 · %s)",

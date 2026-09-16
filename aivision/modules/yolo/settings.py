@@ -79,21 +79,21 @@ class Settings:
     # 끈 상태는 dry-run 과도 다르다. dry-run 은 합성 박스를 **발행한다** — 배관을 보려고
     # 만든 모드다. 끈 것은 아무것도 내보내지 않아야 한다.
     stopped: bool = False
-    # 카메라 번호 -> 그 카메라에만 쓸 모델 파일 이름. 없으면 active_model 을 쓴다.
+    # 카메라 번호 -> 그 카메라에 걸 모델 파일 이름들. 비어 있으면 active_model 을 쓴다.
     #
     # 한 현장에서 카메라마다 보는 것이 다르다. 출입구는 사람, 작업장은 AMR 을 잡아야
-    # 하는데 모델 하나를 전부에 걸면 둘 중 하나는 늘 헛돈다. 모델을 여러 개 올려 두고
-    # 카메라마다 고르게 한다.
+    # 하는데 모델 하나를 전부에 걸면 둘 중 하나는 늘 헛돈다. 그리고 한 카메라가 둘 다
+    # 봐야 하는 자리도 있다 — 그래서 하나가 아니라 목록이다.
     #
     # 열쇠를 문자열로 둔다 — JSON 의 객체 열쇠는 어차피 문자열이라, 숫자로 다루면
     # 저장하고 읽을 때마다 형이 달라진다.
-    camera_models: dict[str, str] = field(default_factory=dict)
-    # 무엇을 추론할지. "viewing" 이면 지금 화면에 떠 있는 카메라만, "all" 이면 담당 전부.
+    camera_models: dict[str, list[str]] = field(default_factory=dict)
+    # 추론을 꺼 둔 카메라 번호.
     #
-    # 추론은 비싸다. 카메라를 여섯 대 붙여도 사람이 보고 있는 것은 대개 한두 대인데,
-    # 전부를 같은 속도로 돌리면 자원이 금세 찬다. 다만 화면을 안 보는 동안에도 잡아야
-    # 하는 현장이 있으므로 고를 수 있게 둔다.
-    scope: str = "viewing"
+    # 모델 목록을 비우는 것으로 '끔' 을 나타내지 않는다. 비었다는 것은 '아직 안 골랐다
+    # = 공통 모델을 쓴다' 는 뜻이라, 정반대인 두 상태를 한 칸에 담게 된다. 실제로
+    # 화면에서도 '(공통)' 과 '사용 안 함' 은 다른 자리에 있어야 사람이 헷갈리지 않는다.
+    camera_off: set[str] = field(default_factory=set)
     tuning: dict[str, float] = field(default_factory=dict)
     # 모델 파일 이름 -> 클래스 표. 순서가 곧 클래스 인덱스라 리스트로 둔다.
     models: dict[str, list[ClassRow]] = field(default_factory=dict)
@@ -146,7 +146,8 @@ class Settings:
             "active_model": self.active_model,
             "stopped": self.stopped,
             "camera_models": self.camera_models,
-            "scope": self.scope,
+            # 집합은 JSON 에 없다. 정렬해 내보내면 파일 차이가 눈으로 읽힌다.
+            "camera_off": sorted(self.camera_off),
             "tuning": self.tuning,
             "notes": self.notes,
             "models": {m: [r.to_dict() for r in rows] for m, rows in self.models.items()},
@@ -157,8 +158,14 @@ def _parse(data: dict) -> Settings:
     s = Settings()
     s.active_model = str(data.get("active_model") or "")
     s.stopped = bool(data.get("stopped"))
-    s.camera_models = {str(k): str(v) for k, v in (data.get("camera_models") or {}).items() if v}
-    s.scope = "all" if str(data.get("scope") or "") == "all" else "viewing"
+    for cam, raw in (data.get("camera_models") or {}).items():
+        # 예전 형식은 모델 이름 하나(문자열)였다. 목록으로 올려 읽는다 — 형식을 바꿨다는
+        # 이유로 현장에서 걸어 둔 설정을 날리면 안 된다.
+        names = [raw] if isinstance(raw, str) else list(raw or [])
+        names = [str(n) for n in names if n]
+        if names:
+            s.camera_models[str(cam)] = names
+    s.camera_off = {str(c) for c in (data.get("camera_off") or [])}
     raw_tuning = data.get("tuning") or {}
     for name, (lo, hi) in TUNING.items():
         if name in raw_tuning:
