@@ -74,10 +74,17 @@ services:
       - "${HLS_PORT:-11885}:8888"
     volumes:
       - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
-      # 녹화를 어디에 쌓을지. 기본은 도커 볼륨이고, .env 의 RECORD_PATH 에 호스트 경로를
-      # 적으면(예: D:/aivision-recordings) 그 폴더에 쌓인다. 큰 디스크로 옮길 때 쓴다.
+      # 녹화를 쌓을 호스트 폴더. .env 의 RECORD_PATH 로 정한다.
+      #
+      # **기본값을 두지 않는다.** 예전에는 :-recordings 로 내려앉게 해 두었는데, 그러면
+      # 값을 안 넣었을 때 조용히 같은 이름의 도커 볼륨이 만들어진다. 아무도 눈치채지
+      # 못한 채 20GB 가 볼륨 안에 쌓였고, 탐색기로도 백업 도구로도 닿을 수 없었으며
+      # compose down -v 한 번이면 통째로 날아갈 자리였다. 영상은 이 시스템에서 가장
+      # 무겁고 가장 되돌릴 수 없는 자산이다 — 어디에 쌓을지는 사람이 정해야 한다.
+      # 그래서 안 정했으면 뜨지 않고 멈춘다.
+      #
       # 컨테이너 안쪽 경로(/recordings)는 바뀌지 않는다 — 바뀌는 것은 '무엇을 붙이나' 다.
-      - ${RECORD_PATH:-recordings}:/recordings
+      - ${RECORD_PATH:?.env 의 RECORD_PATH 에 녹화를 쌓을 호스트 폴더 경로를 넣으세요 (예 C:/aivision-recordings). 도커 볼륨 이름을 넣지 마세요}:/recordings
     # 헬스체크를 두지 않는다. 이 이미지는 셸도 wget 도 없는 최소 이미지라
     # CMD-SHELL 이 아예 실행되지 않고 영원히 unhealthy 로 남는다(잘못된 경보).
     # 미디어 서버 상태는 서버가 Control API 로 확인해 /api/system 에 보여 준다.
@@ -143,7 +150,8 @@ services:
       - ./config:/config
       # 미디어 서버와 같은 것을 본다. 쓰는 쪽은 미디어 서버 하나뿐이고
       # 코어는 용량을 재고 넘칠 때 오래된 것을 지우기 위해 붙는다.
-      - ${RECORD_PATH:-recordings}:/recordings
+      # (기본값을 두지 않는 이유는 base-media 쪽 같은 줄의 주석에 있다.)
+      - ${RECORD_PATH:?.env 의 RECORD_PATH 에 녹화를 쌓을 호스트 폴더 경로를 넣으세요 (예 C:/aivision-recordings). 도커 볼륨 이름을 넣지 마세요}:/recordings
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health').read()"]
       interval: 20s
@@ -334,7 +342,9 @@ services:
 # 그 대가에 비하면 사소하다.
 volumes:
   db-data:         # PostgreSQL 데이터 (base-db)
-  recordings:      # 미디어 서버의 상시 녹화 세그먼트 — 회전 삭제됨 (base-media)
+  # 녹화는 볼륨이 아니다. RECORD_PATH 가 가리키는 호스트 폴더에 쌓는다 — 위 base-media
+  # 의 주석을 보라. 예전에 여기에 'recordings' 볼륨이 있었는데, 값을 안 넣으면 그리로
+  # 흘러들어 20GB 가 폴더 없이 쌓였다.
   media-data:      # 플랫폼 자산 — 스냅샷과 이벤트 클립, 오래 보관 (base-app)
   mqtt-data:       # 브로커 영속 세션 (base-broker)
   mqtt-log:        # 브로커 로그 (base-broker)
