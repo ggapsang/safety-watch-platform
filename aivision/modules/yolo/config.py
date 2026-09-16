@@ -66,6 +66,25 @@ class Config(BaseConfig):
     # class_map(항목 코드)과 층이 다르다 — 이름은 보여 주기용, 코드는 이벤트 승격용이라
     # 하나로 합치면 '이벤트로 안 올리지만 이름은 보고 싶은' 클래스를 표현할 수 없다.
     aliases: dict[str, str] = field(default_factory=dict)
+    # 카메라 번호(문자열) -> 그 카메라에만 쓸 모델 파일 이름. 없으면 model_path 를 쓴다.
+    # 워커마다 모델이 다를 수 있어 경로 하나로 담을 수 없다 — 표를 넘기고 워커가 고른다.
+    camera_models: dict[str, str] = field(default_factory=dict)
+
+    # 모델 이름 -> (class_map, aliases). 카메라별 모델을 쓸 때 각자의 표를 찾는 자리다.
+    model_maps: dict[str, tuple[dict[str, str], dict[str, str]]] = field(default_factory=dict)
+
+    def model_for(self, camera_id: int) -> Path | None:
+        """이 카메라가 열 모델. 지정이 없으면 공통 모델."""
+        name = self.camera_models.get(str(camera_id))
+        return (Path(self.models_dir) / name) if name else self.model_path
+
+    def maps_for(self, model_name: str) -> tuple[dict[str, str], dict[str, str]]:
+        """그 모델의 (항목 코드 표, 표시 이름 표).
+
+        표가 없으면 공통 설정으로 내려간다 — 모델을 막 올려 아직 아무것도 연결하지 않은
+        상태에서도 박스는 그려져야 한다.
+        """
+        return self.model_maps.get(model_name, (self.class_map, self.aliases))
 
     # ── 화면 (이 모듈만 갖는 것) ──
     serve_port: int = 8000               # 컨테이너 안에서 화면·API 를 띄우는 포트
@@ -123,6 +142,16 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
             setattr(cfg, name, s.tuning[name])
 
     cfg.stopped = s.stopped
+    # 카메라별로 다른 모델을 쓸 수 있다. 여기서는 표만 넘기고, 실제로 어느 모델을 열지는
+    # 워커가 자기 카메라를 보고 정한다(main.YoloSource.open) — 워커마다 모델이 다르므로
+    # 설정 객체 하나에 경로를 담을 수 없다.
+    cfg.camera_models = {k: v for k, v in s.camera_models.items()
+                         if (Path(cfg.models_dir) / v).is_file()}
+    dropped = set(s.camera_models) - set(cfg.camera_models)
+    if dropped:
+        log.warning("카메라별 모델 지정 중 파일이 없는 것을 건너뜁니다: %s",
+                    ", ".join(f"{k}->{s.camera_models[k]}" for k in sorted(dropped)))
+
     if s.active_model:
         candidate = Path(cfg.models_dir) / s.active_model
         if candidate.is_file():
@@ -136,3 +165,6 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
         # 화면에서 만든 표가 있으면 그것이 CLASS_MAP env 를 대신한다.
         cfg.class_map = s.class_map(model)
         cfg.aliases = s.alias_map(model)
+
+    # 올려 둔 모델 전부의 표를 담는다. 카메라별로 다른 모델을 쓸 때 워커가 여기서 찾는다.
+    cfg.model_maps = {name: (s.class_map(name), s.alias_map(name)) for name in s.models}

@@ -79,6 +79,15 @@ class Settings:
     # 끈 상태는 dry-run 과도 다르다. dry-run 은 합성 박스를 **발행한다** — 배관을 보려고
     # 만든 모드다. 끈 것은 아무것도 내보내지 않아야 한다.
     stopped: bool = False
+    # 카메라 번호 -> 그 카메라에만 쓸 모델 파일 이름. 없으면 active_model 을 쓴다.
+    #
+    # 한 현장에서 카메라마다 보는 것이 다르다. 출입구는 사람, 작업장은 AMR 을 잡아야
+    # 하는데 모델 하나를 전부에 걸면 둘 중 하나는 늘 헛돈다. 모델을 여러 개 올려 두고
+    # 카메라마다 고르게 한다.
+    #
+    # 열쇠를 문자열로 둔다 — JSON 의 객체 열쇠는 어차피 문자열이라, 숫자로 다루면
+    # 저장하고 읽을 때마다 형이 달라진다.
+    camera_models: dict[str, str] = field(default_factory=dict)
     tuning: dict[str, float] = field(default_factory=dict)
     # 모델 파일 이름 -> 클래스 표. 순서가 곧 클래스 인덱스라 리스트로 둔다.
     models: dict[str, list[ClassRow]] = field(default_factory=dict)
@@ -130,6 +139,7 @@ class Settings:
             "version": VERSION,
             "active_model": self.active_model,
             "stopped": self.stopped,
+            "camera_models": self.camera_models,
             "tuning": self.tuning,
             "notes": self.notes,
             "models": {m: [r.to_dict() for r in rows] for m, rows in self.models.items()},
@@ -140,6 +150,7 @@ def _parse(data: dict) -> Settings:
     s = Settings()
     s.active_model = str(data.get("active_model") or "")
     s.stopped = bool(data.get("stopped"))
+    s.camera_models = {str(k): str(v) for k, v in (data.get("camera_models") or {}).items() if v}
     raw_tuning = data.get("tuning") or {}
     for name, (lo, hi) in TUNING.items():
         if name in raw_tuning:

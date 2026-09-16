@@ -59,6 +59,10 @@ class TuningIn(BaseModel):
     sample_fps: float | None = None
 
 
+class CameraModelIn(BaseModel):
+    model: str = ""
+
+
 class NoteIn(BaseModel):
     note: str = ""
 
@@ -203,6 +207,51 @@ def create_app(cfg, runner_status: Callable[[], dict],
         return JSONResponse({"name": name, "classes": keys,
                              "named": bool(names)}, status_code=201)
 
+    @app.get("/api/cameras")
+    async def cameras() -> JSONResponse:
+        """이 모듈이 담당하는 카메라와, 각 카메라에 걸린 모델.
+
+        담당 목록은 플랫폼이 정한다(관리자/플러그인 탭에서 할당). 여기서는 그것을 받아
+        '어느 카메라에 어느 모델' 만 더한다 — 할당까지 여기서 하면 같은 일을 두 곳에서
+        하게 되고, 어느 쪽이 맞는지 아무도 모르게 된다.
+        """
+        import json
+        import urllib.request
+
+        s = _load()
+        url = f"{cfg.platform_url.rstrip('/')}/api/modules/{cfg.module_id}/work"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:      # noqa: S310
+                work = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:                                      # noqa: BLE001
+            log.warning("일감을 가져오지 못했습니다 (%s): %s", url, exc)
+            return JSONResponse({"items": [], "error": "플랫폼에 연결하지 못했습니다"})
+
+        active = cfg.model_path.name if cfg.model_path else ""
+        return JSONResponse({"items": [
+            {"camera_id": w.get("camera_id"),
+             "name": w.get("camera_name") or "",
+             "location": w.get("location") or "",
+             # 비어 있으면 공통 모델을 쓴다는 뜻이다. 화면이 그것을 '(공통)' 으로 보인다.
+             "model": s.camera_models.get(str(w.get("camera_id")), ""),
+             "effective": s.camera_models.get(str(w.get("camera_id")), "") or active}
+            for w in (work.get("items") or [])
+        ], "active_model": active})
+
+    @app.put("/api/cameras/{camera_id}/model")
+    async def set_camera_model(camera_id: int, body: CameraModelIn) -> JSONResponse:
+        """이 카메라에만 쓸 모델을 정한다. 비우면 공통 모델로 되돌린다."""
+        name = (body.model or "").strip()
+        s = _load()
+        if name:
+            _model_file(name)                 # 없는 모델이면 여기서 404
+            s.camera_models[str(camera_id)] = name
+        else:
+            s.camera_models.pop(str(camera_id), None)
+        _commit(s)
+        log.info("카메라 %d 모델: %s", camera_id, name or "(공통)")
+        return JSONResponse({"camera_id": camera_id, "model": name})
+
     @app.post("/api/models/{name}/use")
     async def use_model(name: str) -> JSONResponse:
         """이 모델로 추론을 시작한다. 꺼 둔 상태였다면 함께 켠다."""
@@ -260,6 +309,11 @@ def create_app(cfg, runner_status: Callable[[], dict],
                                        "먼저 '사용 중단' 하거나 다른 모델을 적용하세요.")
         path.unlink()
         s.models.pop(name, None)
+        # 이 모델을 걸어 둔 카메라가 있으면 함께 푼다. 안 그러면 없는 파일을 가리킨 채
+        # 남아, 그 카메라만 조용히 멈춘다.
+        for cam in [k for k, v in s.camera_models.items() if v == name]:
+            s.camera_models.pop(cam, None)
+            log.info("카메라 %s 의 모델 지정을 풉니다 (모델 삭제)", cam)
         s.notes.pop(name, None)
         settings_module.save(models_dir, s)
         log.info("모델 삭제: %s", name)

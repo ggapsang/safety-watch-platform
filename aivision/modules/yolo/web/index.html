@@ -173,6 +173,20 @@
         <div class="msg" id="model-msg"></div>
       </div>
 
+      <div class="card">
+        <h2>카메라별 모델</h2>
+        <p class="desc">
+          카메라마다 다른 모델을 걸 수 있습니다. 출입구는 사람, 작업장은 AMR 처럼 보는 것이
+          다를 때 씁니다. 비워 두면 위에서 <b>사용</b> 으로 고른 공통 모델을 씁니다.<br />
+          담당 카메라는 플랫폼에서 정합니다 — 플러그인 탭 위쪽의 '이 플러그인이 볼 카메라'.
+        </p>
+        <table>
+          <thead><tr><th>카메라</th><th>설치 위치</th><th>쓸 모델</th></tr></thead>
+          <tbody id="camera-rows"></tbody>
+        </table>
+        <div class="msg" id="camera-msg"></div>
+      </div>
+
       <div class="card" id="class-card">
         <h2>탐지 대상 <span id="class-of" class="of"></span></h2>
         <p class="desc">

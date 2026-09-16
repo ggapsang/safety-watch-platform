@@ -127,6 +127,10 @@ class YoloSource(_Base):
         super().__init__(cfg, item)
         self.model = None
         self.cap = None
+        # open() 에서 이 카메라의 모델을 정하며 함께 채운다. 그 전에도 boxes() 가
+        # 참조할 수 있으므로 공통 표로 시작한다.
+        self.class_map = cfg.class_map
+        self.aliases = cfg.aliases
 
     @property
     def device(self) -> str:
@@ -137,10 +141,20 @@ class YoloSource(_Base):
         import inference
 
         if self.model is None:
-            self.model = inference.load(self.cfg.model_path, self.cfg.device,
+            # 카메라마다 다른 모델을 쓸 수 있다. 한 현장에서도 출입구는 사람, 작업장은
+            # AMR 을 봐야 하는데 모델 하나를 전부에 걸면 둘 중 하나는 늘 헛돈다.
+            path = self.cfg.model_for(item.camera_id)
+            if path is None or not path.is_file():
+                raise RuntimeError(f"모델 파일이 없습니다: {path}")
+            # 클래스 표도 모델별이다. 공통 모델의 표를 다른 모델에 씌우면 라벨과 항목이
+            # 엉뚱하게 붙는다 — 인덱스는 맞는데 뜻이 다른, 가장 찾기 어려운 고장이다.
+            self.class_map, self.aliases = self.cfg.maps_for(path.name)
+            self.model = inference.load(path, self.cfg.device,
                                         self.cfg.imgsz, self.cfg.conf_thres,
-                                        self.cfg.iou_thres, self.cfg.class_map,
+                                        self.cfg.iou_thres, self.class_map,
                                         self.cfg.layout)
+            if path != self.cfg.model_path:
+                log.info("카메라 %d 전용 모델: %s", item.camera_id, path.name)
         # 저화질이 있으면 그것을 쓴다. 모델 입력이 640 이라 4K 를 풀어 놓고 다시 줄이는
         # 것은 CPU 를 그냥 버리는 일이다. 없으면 원본으로 내려간다.
         url = item.stream_for(prefer_sub=self.cfg.prefer_sub_stream)
@@ -166,7 +180,9 @@ class YoloSource(_Base):
         if cap is None or model is None:
             raise RuntimeError("스트림이 열리지 않았습니다")
         min_px = self.cfg.min_box_px
-        aliases = self.cfg.aliases
+        # 이 워커가 연 모델의 표를 쓴다(open 에서 정해 둔다). cfg 의 공통 표를 쓰면
+        # 카메라별 모델을 걸었을 때 다른 모델의 이름이 붙는다.
+        aliases = self.aliases
 
         while not stop.is_set():
             ok, frame = cap.read()

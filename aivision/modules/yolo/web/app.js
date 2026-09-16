@@ -264,6 +264,71 @@ $("upload-btn").onclick = async () => {
   }
 };
 
+/* ── 카메라별 모델 ─────────────────────────────────────────────────── */
+
+let cameras = [];
+
+async function loadCameras() {
+  try {
+    const out = await api("/api/cameras");
+    cameras = out.items || [];
+    renderCameras(out.error || "");
+  } catch (e) {
+    renderCameras(e.message);
+  }
+}
+
+function renderCameras(error) {
+  const models = (state?.models || []).map((m) => m.name);
+  const active = state?.module?.model || "";
+
+  if (error) {
+    $("camera-rows").innerHTML =
+      `<tr><td colspan="3" class="muted">${esc(error)}</td></tr>`;
+    return;
+  }
+  if (!cameras.length) {
+    $("camera-rows").innerHTML =
+      `<tr><td colspan="3" class="muted">담당 카메라가 없습니다.
+         플랫폼(플러그인 탭 위쪽)에서 이 모듈에 카메라를 할당하세요.</td></tr>`;
+    return;
+  }
+
+  $("camera-rows").innerHTML = cameras.map((c) => {
+    const opts = [`<option value=""${c.model ? "" : " selected"}>(공통 — ${esc(active || "없음")})</option>`]
+      .concat(models.map((m) =>
+        `<option value="${esc(m)}"${m === c.model ? " selected" : ""}>${esc(m)}</option>`))
+      .join("");
+    return `<tr>
+      <td><b>${esc(c.name || c.camera_id)}</b></td>
+      <td class="muted">${esc(c.location)}</td>
+      <td><select data-cam="${c.camera_id}">${opts}</select></td>
+    </tr>`;
+  }).join("");
+
+  $("camera-rows").querySelectorAll("[data-cam]").forEach((sel) => {
+    sel.onchange = () => saveCameraModel(sel.dataset.cam, sel.value);
+  });
+}
+
+async function saveCameraModel(cameraId, model) {
+  msg("camera-msg", "저장 중…");
+  try {
+    await api(`/api/cameras/${cameraId}/model`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    msg("camera-msg",
+      model ? `카메라 ${cameraId} 는 ${model} 로 봅니다. 워커가 곧 다시 뜹니다.`
+            : `카메라 ${cameraId} 를 공통 모델로 되돌렸습니다.`, "ok");
+    await refresh();
+    await loadCameras();
+  } catch (e) {
+    msg("camera-msg", e.message, "err");
+  }
+}
+
 /* ── 탐지 대상 ─────────────────────────────────────────────────────── */
 
 function currentModel() {
@@ -399,4 +464,6 @@ async function loadSolutions() {
   setInterval(refresh, 3000);
   // 탐지 항목은 플랫폼에서 가끔 늘어난다. 자주 볼 필요는 없다.
   setInterval(loadSolutions, 30000);
+  // 담당 카메라는 플랫폼에서 바뀐다(20초 주기로 반영된다). 그보다 자주 볼 필요는 없다.
+  setInterval(loadCameras, 15000);
 })();
