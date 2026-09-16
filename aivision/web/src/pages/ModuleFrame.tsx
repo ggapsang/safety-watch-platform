@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { ModuleCameras } from "../components/ModuleCameras";
 import { Button, Card, Section } from "../components/ui";
 import { reachableEndpoint } from "../lib/endpoint";
 import { useModules } from "../lib/hooks";
@@ -97,6 +98,10 @@ export function ModuleFrame() {
           확인하세요.
         </p>
       )}
+      {/* 플러그인 화면 위에 둔다. '왜 아무것도 안 하지' 를 보는 사람이 바로 여기 있고,
+        * 관리자 화면 어딘가에 두면 거기까지 가지 않는다. */}
+      <ModuleCameras mod={mod} />
+
       <Card padded={false} className="overflow-hidden">
         <iframe
           key={nonce}

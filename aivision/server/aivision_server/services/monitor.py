@@ -1,6 +1,9 @@
 """백그라운드 감시 태스크.
 
   · 카메라 온·오프라인 판정과 DB 반영 (변화가 있을 때만 기록·통보)
+  · 미디어 경로 자가 복구 (미디어 서버가 재시작하면 경로가 날아간다)
+  · 요일·시간대 녹화 스케줄 반영 (미디어 서버는 스케줄을 모른다)
+  · 상시 녹화 용량 상한 — 카메라별, 그리고 전체
   · MQTT 원문 로그 보존기간 정리
 
 주기 작업을 한 태스크에 모은 이유: 카메라 2대 규모에서 태스크를 여럿 띄울 이유가 없고,
@@ -14,7 +17,7 @@ import contextlib
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from ..config import get_settings
 from ..db import sessionmaker
@@ -28,6 +31,9 @@ log = logging.getLogger(__name__)
 
 CHECK_INTERVAL = 5.0            # 카메라 상태 점검 주기(초)
 PURGE_INTERVAL = 3600.0         # 로그 정리 주기(초)
+# 미디어 경로 점검 주기(초). 개수만 세는 가벼운 호출이지만 5초마다 할 이유는 없다 —
+# 미디어 서버가 재시작한 뒤 30초 안에 복구되면 사람이 알아채기 전이다.
+HEAL_INTERVAL = 30.0
 
 
 async def _check_cameras() -> None:
@@ -92,6 +98,44 @@ async def _enforce_record_quota() -> None:
     await enforce_quota(max_gb)
 
 
+async def _heal_media_paths() -> None:
+    """미디어 서버에서 경로가 사라졌으면 다시 밀어 넣는다.
+
+    **왜 필요한가.** 미디어 서버가 재시작하면 경로 설정이 초기화된다(우리가 Control API
+    로 만들어 준 것이라 그쪽 설정 파일에는 없다). 그러면 DB 에는 카메라가 멀쩡히 있는데
+    당길 곳이 없어져, 화면은 카메라를 보여 주면서 영상만 검게 남는다. 워커는 '영상 소스
+    열기 실패' 를 3초마다 반복할 뿐 스스로 벗어나지 못한다 — 자기가 붙을 주소가 사라진
+    것이지 주소가 틀린 것이 아니기 때문이다.
+
+    실제로 그 상황을 만났다. 사람이 재시작해야만 복구되는 상태를 남겨 두면 안 된다.
+
+    **싸게 감지한다.** 경로 개수만 센다(health). 경로마다 물어보면 카메라가 늘수록
+    5초 주기가 무거워진다. 개수가 모자랄 때만 sync 를 돌린다 — sync 는 없는 것만
+    만들므로 여러 번 불러도 해가 없다.
+    """
+    from ..media import backend as media_backend
+    from .recording import apply_all
+
+    media = media_backend()
+    if not getattr(media, "supports_recording", False) and media.name == "direct":
+        return                      # 미디어 서버를 안 쓰는 배치다. 고칠 경로가 없다
+
+    health = await media.health()
+    if not health.available:
+        return                      # 미디어 서버 자체가 안 보인다. 복구는 그쪽이 살아난 뒤
+
+    async with sessionmaker()() as session:
+        want = int((await session.execute(
+            select(func.count(Camera.id)).where(Camera.enabled.is_(True)))).scalar() or 0)
+        if want == 0 or health.streams >= want:
+            return
+        log.warning("미디어 경로가 모자랍니다 (있음 %d · 필요 %d) — 다시 등록합니다",
+                    health.streams, want)
+        await manager.sync(session)
+        # 녹화 설정도 경로에 붙어 있던 것이라 함께 날아간다. force 로 다시 민다.
+        await apply_all(session, force=True)
+
+
 async def _apply_record_schedule() -> None:
     """요일·시간대 스케줄을 미디어 서버에 반영한다.
 
@@ -111,11 +155,17 @@ async def _apply_record_schedule() -> None:
 
 async def run() -> None:
     last_purge = 0.0
+    last_heal = 0.0
     last_quota = 0.0
     loop = asyncio.get_running_loop()
     while True:
         try:
             await _check_cameras()
+            # 경로 복구를 녹화 반영보다 먼저 한다. 경로가 없는 상태에서 녹화를 밀면
+            # 미디어 서버가 '없는 경로' 라고 거절하고, 그 실패가 로그만 채운다.
+            if loop.time() - last_heal > HEAL_INTERVAL:
+                last_heal = loop.time()
+                await _heal_media_paths()
             await _apply_record_schedule()
             if loop.time() - last_purge > PURGE_INTERVAL:
                 last_purge = loop.time()

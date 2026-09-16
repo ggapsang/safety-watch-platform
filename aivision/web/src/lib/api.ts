@@ -136,6 +136,17 @@ export const api = {
     request<ConfigSaveResult>("/api/config", { method: "PUT", body: JSON.stringify(body) }),
   system: () => request<SystemStatus>("/api/system"),
   modules: () => request<AnalyticsModule[]>("/api/modules"),
+  // 플러그인이 볼 카메라. 코어가 들고 있는 계약 데이터라 화면도 코어가 그린다 —
+  // 플러그인마다 따로 만들게 하면 협력사가 만든 것에는 영영 생기지 않는다.
+  assignCamera: (moduleId: string, cameraId: number) =>
+    request<{ id: number; camera_id: number; enabled: boolean }>(
+      `/api/modules/${moduleId}/assignments`,
+      { method: "POST", body: JSON.stringify({ camera_id: cameraId }) },
+    ),
+  unassignCamera: (moduleId: string, assignmentId: number) =>
+    request<void>(`/api/modules/${moduleId}/assignments/${assignmentId}`, {
+      method: "DELETE",
+    }),
   /** 상시 녹화 용량 정리를 지금 실행 (주기 작업을 기다리지 않고 확인할 때) */
   purgeRecordings: () =>
     request<{ deleted: number; bytes: number; limit_gb: number }>("/api/system/record/purge", {
