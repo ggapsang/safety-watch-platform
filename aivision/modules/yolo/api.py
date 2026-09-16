@@ -255,13 +255,21 @@ def create_app(cfg, runner_status: Callable[[], dict],
                 # 비면 공통 모델을 쓴다는 뜻이다. 화면이 그것을 '(공통)' 으로 보인다.
                 "models": picked,
                 "off": off,
-                # 실제로 돌아가는 모델. 세 상태(끔·공통·직접 고름)를 화면이 매번 다시
-                # 계산하지 않게 여기서 한 번만 정한다.
-                "effective": [] if off else (picked or ([active] if active else [])),
+                # 실제로 지금 돌고 있는 모델. 세 상태(끔·공통·직접 고름)를 화면이 매번
+                # 다시 계산하지 않게 여기서 한 번만 정한다.
+                #
+                # **모듈 전체 중단을 여기서 함께 본다.** 예전에는 카메라별 끔만 봐서,
+                # 모듈이 통째로 멈춰 있는데도 표가 여섯 줄 모두 초록색으로 '돌고 있다'
+                # 고 말했다. 박스가 왜 안 그려지는지 화면 어디에서도 알 수 없었다.
+                "effective": [] if (off or s.stopped)
+                             else (picked or ([active] if active else [])),
             }
 
         return JSONResponse({"items": [row(w) for w in (work.get("items") or [])],
-                             "active_model": active})
+                             "active_model": active,
+                             # 표가 '꺼짐(이 카메라만)' 과 '중단됨(모듈 전체)' 을 갈라
+                             # 보여 줘야 어디를 눌러 되살릴지 알 수 있다.
+                             "stopped": s.stopped})
 
     @app.put("/api/cameras/{camera_id}/models")
     async def set_camera_models(camera_id: int, body: CameraModelsIn) -> JSONResponse:

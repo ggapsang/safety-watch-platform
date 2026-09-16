@@ -69,6 +69,20 @@
   }
   .pill.unknown { background: var(--surface-card); color: var(--muted); }
   .pill.on { background: #dff0e2; color: #2f7a44; }
+  /* 아무것도 안 나가고 있는 상태. 회색(모름)과 갈라 둔다 — 둘을 같은 색으로 두면
+     '멈춰 있다' 가 '아직 안 봤다' 처럼 읽혀 아무도 손대지 않는다. */
+  .pill.stop { background: #fdecec; color: var(--error); }
+  /* 왜 그 상태인지. 상태만 보이고 이유가 없으면 무엇을 눌러야 할지 모른다. */
+  .why { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+
+  /* 표 위 한 줄 요약 */
+  .state {
+    margin-bottom: 10px; padding: 8px 11px; border-radius: 8px;
+    font-size: 12.5px; background: var(--surface-soft); color: var(--muted);
+  }
+  .state:empty { display: none; }
+  .state.on { background: #dff0e2; color: #2f7a44; }
+  .state.stop { background: #fdecec; color: var(--error); }
   /* 표가 지금 보여 주는 모델의 행 */
   tr.picked > td { background: var(--surface-soft); }
   tr.picked > td:first-child { box-shadow: inset 3px 0 0 var(--primary); }
@@ -212,6 +226,8 @@
           수에 정비례해 비싸므로, 안 볼 곳을 꺼 두는 것이 가장 확실하게 아끼는 방법입니다.<br />
           담당 카메라는 플랫폼에서 정합니다 — 플러그인 탭 위쪽의 '이 플러그인이 볼 카메라'.
         </p>
+        <!-- 표 위의 한 줄 요약. 여섯 줄을 다 읽지 않아도 지금 몇 대가 도는지 보인다. -->
+        <div class="state" id="camera-summary"></div>
         <table class="cams">
           <thead><tr><th>카메라</th><th>설치 위치</th><th>쓸 모델</th><th>지금</th></tr></thead>
           <!-- 비워 두지 않는다. 담당 카메라를 플랫폼에서 받아 오는 동안 빈 표가 보이면

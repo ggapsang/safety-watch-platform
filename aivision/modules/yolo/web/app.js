@@ -320,24 +320,82 @@ function renderCameras(error) {
       <td><b>${esc(c.name || c.camera_id)}</b></td>
       <td class="muted">${esc(c.location)}</td>
       <td><div class="picks${c.off ? " disabled" : ""}">${off}${boxes}</div></td>
-      <td>${effectiveLabel(c, active)}</td>
+      <td>${effectiveLabel(c)}</td>
     </tr>`;
   }).join("");
+
+  renderCameraSummary();
 
   $("camera-rows").querySelectorAll("input[data-cam]").forEach((box) => {
     box.onchange = () => saveCamera(box.dataset.cam);
   });
 }
 
-/** 지금 이 카메라에서 실제로 도는 것. 세 상태를 한눈에 구분되게 쓴다. */
-function effectiveLabel(c, active) {
-  if (c.off) return `<span class="pill unknown">꺼짐</span>`;
+/** 지금 이 카메라에서 **실제로** 도는 것.
+ *
+ * 설정이 아니라 현재 상태를 쓴다. 예전에는 카메라별 '사용 안 함' 만 보고 나머지를 전부
+ * 초록색으로 칠했다 — 모듈이 통째로 중단돼 아무것도 안 나가는 동안에도 표는 여섯 줄
+ * 모두 '돌고 있다' 고 말했고, 박스가 왜 안 그려지는지 화면 어디에도 없었다.
+ *
+ * 멈추는 이유가 네 가지라 네 가지를 다 구분해 보여 준다. 무엇을 눌러 되살릴지는
+ * 이유마다 다르다.
+ */
+function effectiveLabel(c) {
+  if (state?.module?.mode === "stopped") {
+    return `<span class="pill stop">중단됨</span>
+      <div class="why">모듈 전체가 멈춰 있습니다 — '배치된 모델'에서 <b>사용</b></div>`;
+  }
+  if (c.off) {
+    return `<span class="pill stop">꺼짐</span>
+      <div class="why">이 카메라만 꺼 두었습니다</div>`;
+  }
   const running = c.effective || [];
-  if (!running.length) return `<span class="muted">모델 없음</span>`;
-  // 직접 고른 것인지 공통 모델이 내려온 것인지 표시해 둔다. 값만 보이면 위에서
-  // '사용' 모델을 바꿨을 때 이 카메라가 왜 따라 바뀌는지 알 수 없다.
-  const how = (c.models || []).length ? "" : ` <span class="muted">(공통)</span>`;
-  return `<span class="pill on">${esc(running.join(" + "))}</span>${how}`;
+  if (!running.length) {
+    return `<span class="pill stop">모델 없음</span>
+      <div class="why">쓸 모델을 고르거나 공통 모델을 지정하세요</div>`;
+  }
+
+  // 설정상 돌아야 하는 것과 정말 도는 것은 다르다. 스트림이 끊기면 설정은 그대로인 채
+  // 워커만 죽는다 — 그 차이가 안 보이면 카메라 문제를 설정 문제로 착각한다.
+  const inf = state?.inference || {};
+  const err = (inf.errors || {})[String(c.camera_id)];
+  const live = (inf.cameras || []).includes(c.camera_id);
+  // 직접 고른 것인지 공통 모델이 내려온 것인지 적어 둔다. 값만 보이면 위에서 '사용'
+  // 모델을 바꿨을 때 이 카메라가 왜 따라 바뀌는지 알 수 없다.
+  const how = (c.models || []).length ? "직접 지정" : "공통";
+
+  if (err) {
+    return `<span class="pill stop">${esc(running.join(" + "))}</span>
+      <div class="why">${esc(err)}</div>`;
+  }
+  if (!live) {
+    return `<span class="pill unknown">${esc(running.join(" + "))}</span>
+      <div class="why">워커 대기 중…</div>`;
+  }
+  return `<span class="pill on">${esc(running.join(" + "))}</span>
+    <div class="why">${how} · ${esc(inf.device || "-")}</div>`;
+}
+
+/** 표 위의 한 줄 요약. 여섯 줄을 다 읽지 않아도 지금 몇 대가 도는지 보이게 한다. */
+function renderCameraSummary() {
+  const el = $("camera-summary");
+  if (!el) return;
+  if (state?.module?.mode === "stopped") {
+    el.className = "state stop";
+    el.innerHTML = `<b>중단됨</b> — 박스도 이벤트도 나가지 않습니다.
+      오른쪽 '배치된 모델'에서 <b>사용</b>을 누르면 다시 시작합니다.`;
+    return;
+  }
+  const inf = state?.inference || {};
+  const live = (inf.cameras || []).filter(
+    (id) => !cameras.find((c) => c.camera_id === id)?.off).length;
+  const offCount = cameras.filter((c) => c.off).length;
+  el.className = "state" + (live ? " on" : " stop");
+  el.innerHTML = `<b>${live}대 추론 중</b>`
+    + ` · 모델 ${esc(state?.module?.model || "없음")}`
+    + ` · ${esc(inf.device || "-")}`
+    + (offCount ? ` · <span class="muted">꺼 둔 카메라 ${offCount}대</span>` : "")
+    + ` · 초당 ${state?.tuning?.sample_fps ?? "-"}장`;
 }
 
 /** 그 카메라 행의 체크박스를 모아 한 번에 저장한다.
