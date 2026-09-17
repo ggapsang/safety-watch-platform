@@ -180,7 +180,11 @@ class Runner:
         devices = sorted({w.device for w in self.workers.values()})
         return {
             "cameras": sorted(self.workers),
+            # 전체를 한 줄로 요약한 값. 카메라마다 다를 수 있어 합치면 뜻이 흐려진다 —
+            # 한 대만 꺼 두어도 "cuda, 사용 안 함" 이 된다. 화면에서 카메라 한 대를
+            # 가리킬 때는 이것 말고 아래 devices 를 봐야 한다.
             "device": ", ".join(devices) or "-",
+            "devices": {str(c): w.device for c, w in self.workers.items()},
             "frames": sum(w.frames for w in self.workers.values()),
             "published": sum(w.published for w in self.workers.values()),
             "errors": {str(c): w.last_error for c, w in self.workers.items()

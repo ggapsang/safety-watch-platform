@@ -293,33 +293,39 @@ function renderCameras(error) {
 
   if (error) {
     $("camera-rows").innerHTML =
-      `<tr><td colspan="4" class="muted">${esc(error)}</td></tr>`;
+      `<tr><td colspan="5" class="muted">${esc(error)}</td></tr>`;
     return;
   }
   if (!cameras.length) {
     $("camera-rows").innerHTML =
-      `<tr><td colspan="4" class="muted">담당 카메라가 없습니다.
+      `<tr><td colspan="5" class="muted">담당 카메라가 없습니다.
          플랫폼(플러그인 탭 위쪽)에서 이 모듈에 카메라를 할당하세요.</td></tr>`;
     return;
   }
 
   $("camera-rows").innerHTML = cameras.map((c) => {
     const picked = c.models || [];
-    // '사용 안 함' 을 모델 목록과 같은 줄에 두되 선으로 가른다. 정반대 뜻이라
-    // 나란히 섞어 놓으면 '아무것도 안 고름(=공통)' 과 헷갈린다.
-    const off = `<label class="off${c.off ? " on" : ""}">
-      <input type="checkbox" data-cam="${c.camera_id}" data-off ${c.off ? "checked" : ""} />
-      사용 안 함</label><span class="sep"></span>`;
+    const on = !c.off;
+    // 켜진 쪽을 체크된 상태로 보여 준다. 예전에는 '사용 안 함' 에 체크하게 해서,
+    // 체크가 곧 끔이라는 뒤집힌 뜻이었다 — 한 줄만 봐서는 어느 쪽이 켠 건지 몰랐다.
+    const use = `<label class="use ${on ? "on" : "off"}">
+      <input type="checkbox" data-cam="${c.camera_id}" data-use ${on ? "checked" : ""} />
+      <span>${on ? "사용" : "사용 안 함"}</span></label>`;
     const boxes = models.length
       ? models.map((m) => `<label>
           <input type="checkbox" data-cam="${c.camera_id}" value="${esc(m)}"
-                 ${picked.includes(m) ? "checked" : ""} ${c.off ? "disabled" : ""} />
+                 ${picked.includes(m) ? "checked" : ""} ${on ? "" : "disabled"} />
           ${esc(m)}</label>`).join("")
       : `<span class="muted">올려 둔 모델이 없습니다</span>`;
+    // 아무것도 안 골랐을 때 무엇으로 도는지 그 자리에 적는다. 안 적으면 빈 체크박스
+    // 줄만 보고 '아무 모델도 안 돈다' 로 읽는다.
+    const hint = on && !picked.length && active
+      ? `<div class="why">안 고르면 공통 모델 <b>${esc(active)}</b></div>` : "";
     return `<tr>
       <td><b>${esc(c.name || c.camera_id)}</b></td>
       <td class="muted">${esc(c.location)}</td>
-      <td><div class="picks${c.off ? " disabled" : ""}">${off}${boxes}</div></td>
+      <td>${use}</td>
+      <td><div class="picks${on ? "" : " disabled"}">${boxes}</div>${hint}</td>
       <td>${effectiveLabel(c)}</td>
     </tr>`;
   }).join("");
@@ -346,34 +352,34 @@ function effectiveLabel(c) {
       <div class="why">모듈 전체가 멈춰 있습니다 — '배치된 모델'에서 <b>사용</b></div>`;
   }
   if (c.off) {
-    return `<span class="pill stop">꺼짐</span>
-      <div class="why">이 카메라만 꺼 두었습니다</div>`;
+    return `<span class="pill stop">사용 안 함</span>
+      <div class="why">영상도 열지 않습니다</div>`;
   }
   const running = c.effective || [];
   if (!running.length) {
     return `<span class="pill stop">모델 없음</span>
-      <div class="why">쓸 모델을 고르거나 공통 모델을 지정하세요</div>`;
+      <div class="why">모델을 고르거나 공통 모델을 지정하세요</div>`;
   }
 
   // 설정상 돌아야 하는 것과 정말 도는 것은 다르다. 스트림이 끊기면 설정은 그대로인 채
   // 워커만 죽는다 — 그 차이가 안 보이면 카메라 문제를 설정 문제로 착각한다.
   const inf = state?.inference || {};
-  const err = (inf.errors || {})[String(c.camera_id)];
+  const cam = String(c.camera_id);
+  const err = (inf.errors || {})[cam];
   const live = (inf.cameras || []).includes(c.camera_id);
-  // 직접 고른 것인지 공통 모델이 내려온 것인지 적어 둔다. 값만 보이면 위에서 '사용'
-  // 모델을 바꿨을 때 이 카메라가 왜 따라 바뀌는지 알 수 없다.
-  const how = (c.models || []).length ? "직접 지정" : "공통";
 
   if (err) {
-    return `<span class="pill stop">${esc(running.join(" + "))}</span>
-      <div class="why">${esc(err)}</div>`;
+    return `<span class="pill stop">오류</span><div class="why">${esc(err)}</div>`;
   }
   if (!live) {
-    return `<span class="pill unknown">${esc(running.join(" + "))}</span>
-      <div class="why">워커 대기 중…</div>`;
+    return `<span class="pill unknown">대기 중</span>
+      <div class="why">워커가 뜨는 중입니다</div>`;
   }
-  return `<span class="pill on">${esc(running.join(" + "))}</span>
-    <div class="why">${how} · ${esc(inf.device || "-")}</div>`;
+  // 장치는 부가 정보다. 이 카메라의 것을 쓴다 — 전체 집계(inf.device)를 쓰면 한 대만
+  // 꺼 두어도 모든 줄에 'cuda, 사용 안 함' 이 붙는다.
+  const dev = (inf.devices || {})[cam] || inf.device || "-";
+  return `<span class="pill on">동작 중</span>
+    <div class="why">${esc(running.join(" + "))} · ${esc(dev)}</div>`;
 }
 
 /** 표 위의 한 줄 요약. 여섯 줄을 다 읽지 않아도 지금 몇 대가 도는지 보이게 한다. */
@@ -387,15 +393,19 @@ function renderCameraSummary() {
     return;
   }
   const inf = state?.inference || {};
-  const live = (inf.cameras || []).filter(
-    (id) => !cameras.find((c) => c.camera_id === id)?.off).length;
-  const offCount = cameras.filter((c) => c.off).length;
+  const on = cameras.filter((c) => !c.off);
+  const live = on.filter((c) => (inf.cameras || []).includes(c.camera_id)).length;
+  const offCount = cameras.length - on.length;
+  // 장치는 실제로 도는 카메라들의 것만 모은다. 꺼 둔 카메라의 '사용 안 함' 이 장치
+  // 이름에 섞여 들어가면 무엇으로 추론하는지가 안 읽힌다.
+  const devs = [...new Set(on.map((c) => (inf.devices || {})[String(c.camera_id)])
+                             .filter((d) => d && d !== "사용 안 함"))];
   el.className = "state" + (live ? " on" : " stop");
-  el.innerHTML = `<b>${live}대 추론 중</b>`
-    + ` · 모델 ${esc(state?.module?.model || "없음")}`
-    + ` · ${esc(inf.device || "-")}`
-    + (offCount ? ` · <span class="muted">꺼 둔 카메라 ${offCount}대</span>` : "")
-    + ` · 초당 ${state?.tuning?.sample_fps ?? "-"}장`;
+  el.innerHTML = `<b>${live} / ${on.length}대 동작 중</b>`
+    + ` · 공통 모델 ${esc(state?.module?.model || "없음")}`
+    + ` · ${esc(devs.join(", ") || "-")}`
+    + ` · 초당 ${state?.tuning?.sample_fps ?? "-"}장`
+    + (offCount ? ` · <span class="muted">사용 안 함 ${offCount}대</span>` : "");
 }
 
 /** 그 카메라 행의 체크박스를 모아 한 번에 저장한다.
@@ -407,7 +417,9 @@ async function saveCamera(cameraId) {
   let off = false;
   const picked = [];
   row.forEach((box) => {
-    if (box.dataset.off !== undefined) off = box.checked;
+    // '사용' 은 켜진 쪽이 체크다. 서버가 들고 있는 것은 그 반대(off)라 여기서 뒤집는다 —
+    // 화면은 사람이 읽기 좋은 쪽, 저장은 '예외를 기록' 하는 쪽이 각각 자연스럽다.
+    if (box.dataset.use !== undefined) off = !box.checked;
     else if (box.checked) picked.push(box.value);
   });
 
