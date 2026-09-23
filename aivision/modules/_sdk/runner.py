@@ -162,11 +162,22 @@ class Runner:
         wanted = {i.camera_id: i for i in items}
         for cam_id in list(self.workers):
             worker = self.workers[cam_id]
-            if cam_id not in wanted or not worker.is_alive():
-                worker.stop()
-                self.workers.pop(cam_id, None)
-                if cam_id in wanted:
-                    log.info("카메라 %d 워커가 죽어 있어 다시 띄웁니다", cam_id)
+            if cam_id in wanted and worker.is_alive():
+                continue
+            worker.stop()
+            if worker.is_alive():
+                # 아직 cap.read() 안에 갇혀 있다. 소켓 타임아웃(cfg.rtsp_options 의
+                # timeout)에 걸려 몇 초 안에 빠져나오므로 다음 폴링에서 다시 본다.
+                #
+                # **여기서 자리를 비우면 안 된다.** 비우면 아래에서 곧바로 새 워커가
+                # 떠서 같은 스트림을 두 디코더가 빨아들인다. 서로 밀려 또 타임아웃이
+                # 나고 또 하나가 는다 — 객체감지에서 그렇게 62개가 쌓였다.
+                log.debug("카메라 %d 워커가 아직 정리 중입니다 — 다음 폴링에서 다시 봅니다",
+                          cam_id)
+                continue
+            self.workers.pop(cam_id, None)
+            if cam_id in wanted:
+                log.info("카메라 %d 워커가 죽어 있어 다시 띄웁니다", cam_id)
         for cam_id, item in wanted.items():
             if cam_id in self.workers:
                 continue

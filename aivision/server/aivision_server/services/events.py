@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -100,7 +102,7 @@ async def ingest_signal(session: AsyncSession, signal: DetectionSignal) -> Event
                              label=b.label, score=b.score))
 
     if s.snapshot_on_event:
-        path = _save_snapshot(camera.id, event.code)
+        path = await _save_snapshot(camera.id, event.code)
         if path:
             event.snapshot_path = path
 
@@ -120,19 +122,14 @@ async def ingest_signal(session: AsyncSession, signal: DetectionSignal) -> Event
     return event
 
 
-def _save_snapshot(camera_id: int, code: str) -> str:
+async def _save_snapshot(camera_id: int, code: str) -> str:
     """이벤트 발생 시점의 프레임을 파일로 남긴다.
 
     주의: 어떤 이유로 실패하든(영상 미수신, 디코더 오류, 디스크 문제) 이벤트 적재는 계속돼야
       한다. 캡쳐는 참고 자료이고 이벤트가 본체다.
     """
-    from ..streaming.manager import manager
-
     try:
-        worker = manager.get(camera_id)
-        if worker is None:
-            return ""
-        jpeg = worker.snapshot_jpeg()
+        jpeg = await _event_jpeg(camera_id)
         if not jpeg:
             return ""
         path = get_settings().snapshot_path / f"{code}.jpg"
@@ -141,6 +138,47 @@ def _save_snapshot(camera_id: int, code: str) -> str:
     except Exception:                                        # noqa: BLE001
         log.warning("스냅샷 저장 실패(%s) — 이벤트는 정상 기록합니다", code, exc_info=True)
         return ""
+
+
+# 원본 화질 워커가 붙기를 기다리는 시간.
+#
+# 평소에는 저화질만 돌고 있어서, 아무도 안 보던 카메라에서 이벤트가 나면 그때 원본을
+# 새로 연다. RTSP 협상에 1~2초가 걸린다. 이보다 길게 잡으면 이벤트 적재가 그만큼
+# 밀리고, 짧게 잡으면 매번 저화질로 떨어진다.
+SNAPSHOT_WAIT_SEC = 2.5
+
+
+async def _event_jpeg(camera_id: int) -> bytes | None:
+    """이벤트에 붙일 그림. **원본 화질을 먼저 시도한다.**
+
+    사고 기록은 나중에 '그때 누가 있었나' 를 확인하는 자료다. 썸네일용 저화질로 남기면
+    정작 필요할 때 알아볼 수가 없다.
+
+    대신 순간은 조금 늦는다. 원본을 새로 여는 동안(1~2초) 장면이 지나가므로, 이 그림은
+    판정 시점이 아니라 그 직후다. 연달아 터지는 판정은 앞에서 열어 둔 워커를 그대로
+    쓰므로(MAIN_IDLE_SEC) 두 번째부터는 즉시다.
+
+    끝내 못 붙으면 저화질이라도 남긴다 — 흐린 그림이 없는 그림보다 낫다.
+    """
+    from ..streaming.manager import manager
+
+    worker = await manager.acquire_main(camera_id)
+    try:
+        if worker is not None:
+            deadline = time.monotonic() + SNAPSHOT_WAIT_SEC
+            while time.monotonic() < deadline:
+                jpeg = worker.snapshot_jpeg()
+                if jpeg:
+                    return jpeg
+                await asyncio.sleep(0.2)
+    finally:
+        await manager.release_main(camera_id)
+
+    low = manager.get(camera_id)
+    if low is None:
+        return None
+    log.info("카메라 %d 원본 화질이 제때 붙지 않아 저화질로 남깁니다", camera_id)
+    return low.snapshot_jpeg()
 
 
 # ────────────────────────────────────────────────────────────── DTO

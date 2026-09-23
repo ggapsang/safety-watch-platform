@@ -22,7 +22,18 @@ BOUNDARY = "aivisionframe"
 
 
 async def mjpeg_response(camera_id: int) -> StreamingResponse:
-    worker = manager.get(camera_id)
+    """크게 띄운 화면. **여기서만 원본 화질을 디코딩한다.**
+
+    이 연결이 곧 '지금 이 카메라를 크게 보고 있다' 는 신호다. 브라우저가 물고 있는
+    HTTP 스트림이라 붙고 끊기는 순간이 정확하다 — 예전에 '보고 있는 카메라' 를 주기
+    보고로 추측했다가 값이 워커에 고정돼 영영 안 바뀐 적이 있다. 소켓은 추측하지 않는다.
+
+    목록의 작은 칸은 스냅샷(snapshot.jpg)이라 이 경로를 타지 않는다. 그래서 썸네일
+    여섯 개를 띄워 놓아도 원본 디코딩은 하나도 일어나지 않는다.
+    """
+    if manager.get(camera_id) is None:
+        raise HTTPException(status_code=404, detail="스트리밍 중인 카메라가 아닙니다")
+    worker = await manager.acquire_main(camera_id)
     if worker is None:
         raise HTTPException(status_code=404, detail="스트리밍 중인 카메라가 아닙니다")
 
@@ -46,6 +57,10 @@ async def mjpeg_response(camera_id: int) -> StreamingResponse:
                 )
         except asyncio.CancelledError:      # 브라우저가 탭을 닫으면 여기로 온다
             raise
+        finally:
+            # **반드시 놓는다.** 안 놓으면 그 카메라는 아무도 안 봐도 영원히 원본을
+            # 디코딩한다. 취소로 빠져나가는 경로가 있어서 finally 여야 한다.
+            await manager.release_main(camera_id)
 
     return StreamingResponse(
         gen(),

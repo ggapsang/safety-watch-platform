@@ -167,6 +167,9 @@ async def run() -> None:
                 last_heal = loop.time()
                 await _heal_media_paths()
             await _apply_record_schedule()
+            # 아무도 안 보게 된 고화질 워커를 내린다. 유예가 지난 것만 내려가므로
+            # 카메라를 이리저리 눌러 보는 동안에는 붙잡혀 있는다(StreamManager 참조).
+            await manager.reap_main()
             if loop.time() - last_purge > PURGE_INTERVAL:
                 last_purge = loop.time()
                 await _purge_logs()

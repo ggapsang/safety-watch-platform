@@ -23,6 +23,13 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+# 정지 신호를 준 뒤 스레드가 끝나기를 기다리는 시간.
+#
+# rtsp_ffmpeg_options 의 timeout(5초)보다 넉넉히 길게 잡는다. 막혀 있던 read() 는 그
+# 타임아웃에 걸려 돌아오고, 그때 정지 신호를 보고 나간다 — 그 한 바퀴를 기다려 주는
+# 값이다. 짧게 잡으면 아직 살아 있는 워커를 '끝났다' 로 오해하게 된다.
+STOP_JOIN_SEC = 8.0
+
 
 class CameraWorker:
     def __init__(self, camera_id: int, source: str, *, label: str = "",
@@ -71,12 +78,38 @@ class CameraWorker:
         return self
 
     def stop(self) -> None:
+        """멈추라고 알리고 실제로 끝날 때까지 기다린다.
+
+        **끝나지 않았으면 그렇게 말한다.** 예전에는 4초 기다린 뒤 결과와 무관하게
+        `self._thread = None` 으로 참조를 버렸다. 스레드가 cap.read() 안에 갇혀 있으면
+        정지 신호를 볼 기회가 없는데, 부르는 쪽은 멈춘 줄 알고 같은 카메라에 새 워커를
+        띄운다. 그러면 같은 스트림을 두 디코더가 빨아들이고, 서로 밀려 또 타임아웃이
+        나고, 또 하나가 늘어난다 — 6일 만에 카메라 6대에 디코더가 16개가 됐다.
+
+        버려진 스레드는 아무도 가리키지 않으니 회수할 방법도 없다. 그래서 참조를
+        남긴다. `alive` 를 보고 부르는 쪽이 새로 띄울지 판단한다(manager.sync).
+        """
         self._stop.set()
         with self._lock:
             self._new_jpeg.notify_all()
-        if self._thread is not None:
-            self._thread.join(timeout=4.0)
+        thread = self._thread
+        if thread is None:
+            return
+        thread.join(timeout=STOP_JOIN_SEC)
+        if thread.is_alive():
+            # 죽이지는 못한다. 파이썬에 스레드를 강제 종료하는 방법이 없고, 디코더
+            # 한가운데서 끊으면 FFMPEG 쪽 상태가 깨진다. timeout 옵션이 걸려 있으면
+            # 몇 초 안에 스스로 빠져나오므로, 남겨 두고 그 사실만 알린다.
+            log.warning("[%s] 워커가 %.0fs 안에 끝나지 않았습니다 — 정리될 때까지 "
+                        "이 카메라는 새로 열지 않습니다", self.label, STOP_JOIN_SEC)
+            return
         self._thread = None
+
+    @property
+    def alive(self) -> bool:
+        """아직 스레드가 돌고 있나. stop() 뒤에도 True 일 수 있다."""
+        t = self._thread
+        return t is not None and t.is_alive()
 
     # ------------------------------------------------------------- 내부 루프
 

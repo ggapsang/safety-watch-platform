@@ -83,7 +83,16 @@ class Settings(BaseSettings):
     stream_max_width: int = 1280               # 송출 전 축소(원본 4K 그대로 보내지 않는다)
     rtsp_reconnect_sec: float = 3.0
     rtsp_read_timeout_sec: float = 10.0
-    rtsp_ffmpeg_options: str = "rtsp_transport;tcp|buffer_size;1024000|stimeout;5000000"
+    # **timeout 을 빼면 안 된다.** 이것이 없으면 소켓 I/O 타임아웃이 0(무한)이라,
+    # 카메라가 TCP 연결만 열어 둔 채 조용해졌을 때 cap.read() 가 영영 돌아오지 않는다.
+    # 그 스레드는 정지 신호를 볼 기회조차 없어 디코더를 쥔 채 남고, 그 자리에 새 워커가
+    # 떠서 같은 스트림을 또 연다 — 6일 만에 카메라 6대에 디코더가 16개까지 늘었다.
+    #
+    # 예전에는 stimeout 으로 적어 두었는데 FFmpeg 5 에서 이름이 바뀌고 6 에서 없어졌다.
+    # 지금 이미지는 7.1 이라 그 줄은 조용히 무시되고 있었다 — 값을 준 적 없는 것과 같다.
+    # 둘 다 적어 둔다. 모르는 옵션은 무시되므로 옛 빌드에서도 안전하다.
+    rtsp_ffmpeg_options: str = ("rtsp_transport;tcp|buffer_size;1024000"
+                                "|timeout;5000000|stimeout;5000000")
     # 영상 프레임이 이 시간 이상 안 들어오면 '영상 끊김'으로 본다.
     camera_stale_sec: float = 8.0
     # MQTT heartbeat 가 이 시간 이상 없으면 '장비 무응답'으로 본다.

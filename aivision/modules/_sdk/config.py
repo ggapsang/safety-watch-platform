@@ -55,6 +55,17 @@ class BaseConfig:
     live_min_interval: float = 0.3       # 라이브 발행 최소 간격(초). 브라우저 보호
     log_level: str = "INFO"
 
+    # RTSP 를 여는 모듈이 OpenCV/FFMPEG 에 넘길 옵션.
+    #
+    # **timeout 을 빼면 안 된다.** 기본값이 0(무한)이라, 카메라가 TCP 연결만 열어 둔 채
+    # 조용해지면 cap.read() 가 영영 돌아오지 않는다. 그 워커 스레드는 정지 신호를 볼
+    # 기회조차 없어 디코더를 쥔 채 남고, 그 자리에 새 워커가 떠서 같은 스트림을 또 연다.
+    # 객체감지에서 실제로 그렇게 62개 스레드가 쌓였다.
+    #
+    # tcp 도 함께 못 박는다. 기본은 UDP 라 패킷이 새면 디코더가 깨진 프레임을 계속
+    # 물고 늘어진다.
+    rtsp_options: str = "rtsp_transport;tcp|buffer_size;1024000|timeout;5000000"
+
     # 모델 클래스·메타데이터 클래스 -> 플랫폼 탐지 항목 코드
     class_map: dict[str, str] = field(default_factory=dict)
 
@@ -77,6 +88,13 @@ class BaseConfig:
         self.publish_live = flag("PUBLISH_LIVE", self.publish_live)
         self.live_min_interval = num("LIVE_MIN_INTERVAL", self.live_min_interval)
         self.log_level = env("LOG_LEVEL", self.log_level)
+
+        # OpenCV 는 VideoCapture 를 만드는 순간 이 환경변수를 읽는다. 설정을 읽는
+        # 여기서 한 번 세워 두면, 스트림을 여는 모듈이 무엇을 하든 옵션이 걸린다 —
+        # 모듈마다 기억해서 넘기게 하면 언젠가 한 곳이 빠진다(실제로 빠져 있었다).
+        self.rtsp_options = env("RTSP_OPTIONS", self.rtsp_options)
+        if self.rtsp_options:
+            os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", self.rtsp_options)
 
 
 def class_map_from_env(name: str = "CLASS_MAP") -> dict[str, str]:

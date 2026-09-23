@@ -232,6 +232,13 @@ services:
       # 출력 텐서 해석. auto 가 틀리는 모델을 만나면 v5 / v8 / nms 로 못 박는다.
       LAYOUT: ${YOLO_LAYOUT:-auto}
       SAMPLE_FPS: ${YOLO_SAMPLE_FPS:-3}
+      # 추론은 **원본**으로 본다.
+      #
+      # 저화질(profile4, 640x360)을 등록하면서 화면 쪽은 그것으로 옮겼다. 추론까지
+      # 따라가면 CPU 는 더 줄지만, 모델 입력이 640 이라 화면 전체가 딱 한 칸에 들어가
+      # 멀리 있는 작은 AMR 이 몇 픽셀로 뭉갠다. 탐지 정확도는 화면 부하와 바꿀 것이
+      # 아니다 — 추론은 GPU 에서 돌고 있어 CPU 를 더 쓰지도 않는다.
+      PREFER_SUB_STREAM: ${YOLO_PREFER_SUB:-false}
       HOLD_SEC: ${YOLO_HOLD_SEC:-3}
       MIN_CONF: ${YOLO_MIN_CONF:-0.4}
       # 이 크기(sqrt(w*h) 픽셀)보다 작은 박스는 버린다. 0 이면 안 버린다.
