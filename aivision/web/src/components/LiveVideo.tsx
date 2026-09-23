@@ -71,6 +71,17 @@ export function LiveVideo({
     }
   }, [camera.status]);
 
+  // 카메라를 바꾸면 '아직 안 실렸다' 로 되돌린다.
+  //
+  // 이것이 없으면 loaded 가 이전 카메라에서 true 가 된 채 남는다. 새 영상의 첫 프레임이
+  // 오기 전에 새 카메라의 박스가 이미 도착하므로, 지나간 화면 위에 다음 장면의 박스가
+  // 얹혀 엉뚱한 곳을 가리키는 것처럼 보인다. 크게 띄운 화면은 볼 때 원본을 새로 여느라
+  // 1~2초가 걸려서 그 틈이 눈에 띈다.
+  useEffect(() => {
+    setLoaded(false);
+    setFailed(false);
+  }, [camera.id]);
+
   const offline = camera.status !== "normal";
   const showStream = active && !offline && !failed;
 
@@ -88,7 +99,11 @@ export function LiveVideo({
       <div className={cx("relative w-full", fill ? "h-full" : "aspect-video")}>
         {showStream ? (
           <img
-            key={nonce}
+            // 카메라 번호를 열쇠에 넣어 <img> 를 새로 만든다. 같은 요소를 재사용하면
+            // 이전 화면이 남은 채 주소만 바뀌어, 새 영상이 실릴 때까지 지난 장면이
+            // 보인다. 앞의 MJPEG 연결도 이때 확실히 끊긴다 — 서버는 그 연결을 세어
+            // 고화질 워커를 붙잡으므로, 안 끊으면 안 보는 카메라가 계속 원본을 문다.
+            key={`${camera.id}:${nonce}`}
             src={`${api.streamUrl(camera.id)}?t=${nonce}`}
             alt={`${camera.name} 라이브 영상`}
             onLoad={(e) => {
@@ -103,8 +118,14 @@ export function LiveVideo({
           />
         ) : null}
 
-        {/* 박스 오버레이 — 영상과 같은 비율·정렬이라 레터박스까지 겹친다 */}
-        {showStream && boxes.length > 0 && (
+        {/* 박스 오버레이 — 영상과 같은 비율·정렬이라 레터박스까지 겹친다.
+          *
+          * **첫 프레임이 실린 뒤에만 그린다(loaded).** 박스는 WebSocket 으로 따로 오므로
+          * 영상보다 먼저 도착한다. 먼저 그리면 아직 안 바뀐 화면 위에 다음 장면의 박스가
+          * 얹혀, 탐지가 엉뚱한 곳을 짚은 것처럼 보인다. 화면과 박스는 같은 순간이어야 한다.
+          * viewBox 도 첫 프레임의 naturalWidth/Height 로 정해지므로 그 전에는 좌표계 자체가
+          * 이전 카메라의 것이다. */}
+        {showStream && loaded && boxes.length > 0 && (
           <svg
             viewBox={`0 0 ${size.w} ${size.h}`}
             preserveAspectRatio="xMidYMid meet"
