@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 # 값이다. 짧게 잡으면 아직 살아 있는 워커를 '끝났다' 로 오해하게 된다.
 STOP_JOIN_SEC = 8.0
 
+# 수신 fps 를 재는 창. 짧으면 도착이 뭉칠 때마다 숫자가 튀고, 길면 끊긴 것을 늦게 안다.
+FPS_WINDOW_SEC = 2.0
+
 
 class CameraWorker:
     def __init__(self, camera_id: int, source: str, *, label: str = "",
@@ -62,6 +65,8 @@ class CameraWorker:
         self.width = 0
         self.height = 0
         self.fps = 0.0
+        self._fps_frames = 0
+        self._fps_since = 0.0
 
         self.is_file = ("://" not in source) and os.path.exists(source)
 
@@ -131,7 +136,7 @@ class CameraWorker:
         import cv2
 
         cap = None
-        last_t = time.perf_counter()
+        # (fps 는 연결될 때마다 창을 새로 연다 — 아래 참조)
         while not self._stop.is_set():
             if cap is None or not cap.isOpened():
                 if cap is not None:
@@ -149,6 +154,9 @@ class CameraWorker:
                 self.last_error = ""
                 self._last_frame_at = time.monotonic()
                 log.info("[%s] 영상 소스 연결됨", self.label)
+                self._fps_frames = 0
+                self._fps_since = time.monotonic()
+                self.fps = 0.0
 
             ok, frame = cap.read()
             now = time.monotonic()
@@ -170,11 +178,18 @@ class CameraWorker:
             self._last_frame_at = now
             self.height, self.width = frame.shape[:2]
 
-            t = time.perf_counter()
-            dt = t - last_t
-            last_t = t
-            if dt > 0:
-                self.fps = 0.9 * self.fps + 0.1 * (1.0 / dt) if self.fps else 1.0 / dt
+            # 창을 두고 '몇 장 / 몇 초' 로 센다.
+            #
+            # 예전에는 직전 프레임과의 간격 하나로 1/dt 를 내어 지수평균했다. RTSP 는
+            # 프레임이 뭉쳐서 도착하는데(한 번에 여러 장), 그때마다 dt 가 0에 가까워져
+            # 순간값이 치솟는다. 평균이 그것을 따라 올라가 30fps 스트림이 화면에
+            # 400fps 로 찍혔다 — 실제로 그렇게 보고 있었다.
+            self._fps_frames += 1
+            elapsed = now - self._fps_since
+            if elapsed >= FPS_WINDOW_SEC:
+                self.fps = self._fps_frames / elapsed
+                self._fps_frames = 0
+                self._fps_since = now
 
             # 송출 상한을 넘지 않게 인코딩 빈도를 제한한다(원본이 30fps 여도 12fps 로만 내보낸다).
             encode = (now - self._last_encode_at) >= self.min_interval
