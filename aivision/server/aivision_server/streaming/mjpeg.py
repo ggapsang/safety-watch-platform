@@ -39,10 +39,19 @@ async def mjpeg_response(camera_id: int) -> StreamingResponse:
 
     async def gen() -> AsyncIterator[bytes]:
         last = -1
+        cur = worker
         try:
             while True:
+                # 매 바퀴 워커를 다시 고른다. 고화질 워커가 상한에 걸려 내려가거나
+                # 재기동 중이면 저화질로 이어 받는다 — 화면이 검어지는 것보다 흐려지는
+                # 편이 낫다. 워커가 바뀌면 프레임 번호도 새로 센다(seq 는 워커별이다).
+                nxt = manager.get_main(camera_id) or manager.get(camera_id)
+                if nxt is None:
+                    break
+                if nxt is not cur:
+                    cur, last = nxt, -1
                 # wait_jpeg 은 블로킹이므로 스레드로 넘긴다(이벤트 루프를 막지 않도록).
-                seq, jpeg = await asyncio.to_thread(worker.wait_jpeg, last, 2.0)
+                seq, jpeg = await asyncio.to_thread(cur.wait_jpeg, last, 2.0)
                 if jpeg is None:
                     await asyncio.sleep(0.2)
                     continue

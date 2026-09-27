@@ -21,7 +21,7 @@
  *   화면에 여러 개를 동시에 띄우면 다른 API 호출이 막힌다. active=false 면 <img> 를 아예
  *   내려 연결을 끊는다.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import { LABEL_FILL, boxColor } from "../lib/boxcolor";
@@ -57,6 +57,7 @@ export function LiveVideo({
   const { data: settings } = useSettings();
   const colors = settings?.box_colors ?? {};
 
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const [failed, setFailed] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -82,6 +83,18 @@ export function LiveVideo({
     setFailed(false);
   }, [camera.id]);
 
+  // 이 화면을 떠날 때 MJPEG 연결을 손으로 끊는다.
+  //
+  // <img> 를 DOM 에서 떼는 것만으로는 multipart 연결이 끊긴다는 보장이 없다. src 를
+  // 비우면 브라우저가 진행 중인 요청을 확실히 중단한다. 서버는 이 연결을 세어 원본
+  // 디코딩을 붙잡으므로, 안 끊으면 아무도 안 보는 카메라가 계속 원본을 문다.
+  useEffect(() => {
+    const img = imgRef.current;
+    return () => {
+      if (img) img.src = "";
+    };
+  }, [nonce]);
+
   const offline = camera.status !== "normal";
   const showStream = active && !offline && !failed;
 
@@ -99,11 +112,19 @@ export function LiveVideo({
       <div className={cx("relative w-full", fill ? "h-full" : "aspect-video")}>
         {showStream ? (
           <img
-            // 카메라 번호를 열쇠에 넣어 <img> 를 새로 만든다. 같은 요소를 재사용하면
-            // 이전 화면이 남은 채 주소만 바뀌어, 새 영상이 실릴 때까지 지난 장면이
-            // 보인다. 앞의 MJPEG 연결도 이때 확실히 끊긴다 — 서버는 그 연결을 세어
-            // 고화질 워커를 붙잡으므로, 안 끊으면 안 보는 카메라가 계속 원본을 문다.
-            key={`${camera.id}:${nonce}`}
+            // **열쇠에 카메라 번호를 넣지 않는다.** 한때 넣어 봤다가 크게 데었다.
+            //
+            // 넣으면 카메라를 바꿀 때마다 React 가 <img> 를 새로 만들고 옛 것을 떼는데,
+            // 브라우저는 떼어낸 <img> 의 multipart 연결을 끊지 않는다. 보이지도 않는
+            // 요소로 영상이 계속 흘러들고, 서버는 그 연결을 '보는 중' 으로 세어 원본
+            // 디코딩을 붙잡는다. 카메라를 네 번 바꾸면 원본 워커가 네 개 돌아간다 —
+            // 실제로 닷새 만에 CPU 가 46% 에서 474% 가 됐다.
+            //
+            // 같은 요소를 두고 src 만 바꾸면 브라우저가 앞의 요청을 **중단한다.**
+            // 자원 회수를 브라우저의 선의에 기대지 않는 유일한 방법이다.
+            // 지난 장면이 남는 문제는 아래 opacity 로 가린다(요소를 버릴 일이 아니다).
+            ref={imgRef}
+            key={nonce}
             src={`${api.streamUrl(camera.id)}?t=${nonce}`}
             alt={`${camera.name} 라이브 영상`}
             onLoad={(e) => {
@@ -114,7 +135,13 @@ export function LiveVideo({
               }
             }}
             onError={() => setFailed(true)}
-            className="absolute inset-0 h-full w-full object-contain"
+            className={cx(
+              "absolute inset-0 h-full w-full object-contain",
+              // 새 영상의 첫 프레임이 올 때까지 가린다. 같은 요소를 재사용하므로 그 전에는
+              // 이전 카메라의 마지막 장면이 그대로 남아 있다 — 그 위에 새 카메라의 박스가
+              // 얹히면 탐지가 엉뚱한 곳을 짚은 것처럼 보인다(그래서 박스도 loaded 로 막는다).
+              !loaded && "opacity-0",
+            )}
           />
         ) : null}
 

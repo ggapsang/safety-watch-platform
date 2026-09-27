@@ -63,6 +63,17 @@ def masked_rtsp_url(cam: Camera) -> str:
 # 이벤트 스냅샷도 이 온기를 같이 쓴다 — 한 번 열어 두면 연달아 터지는 판정이 재사용한다.
 MAIN_IDLE_SEC = 25.0
 
+# 동시에 돌 수 있는 고화질 워커 수.
+#
+# 화면에 크게 뜨는 것은 한 번에 하나다. 그보다 많이 돌고 있다면 누군가 연결을 놓지
+# 않은 것이다 — 브라우저가 떼어낸 <img> 의 multipart 연결을 안 끊는 일이 실제로 있었고,
+# 닷새 만에 원본 워커가 넷까지 늘어 CPU 가 46% 에서 474% 가 됐다.
+#
+# 자원 회수를 상대의 선의에만 기대지 않는다. 화면 코드는 고쳤지만, 그것이 다시 틀려도
+# 여기서 막힌다. 두 개를 두는 이유는 화면을 바꾸는 찰나에 옛 것과 새 것이 잠깐 겹치기
+# 때문이다 — 그때 멀쩡한 쪽을 내리면 전환할 때마다 화면이 끊긴다.
+MAX_MAIN_WORKERS = 2
+
 
 class StreamManager:
     """카메라마다 워커를 **화질별로** 따로 둔다.
@@ -87,6 +98,7 @@ class StreamManager:
         self._main: dict[int, CameraWorker] = {}
         self._main_holders: dict[int, int] = {}
         self._main_idle_at: dict[int, float] = {}
+        self._main_used: dict[int, float] = {}        # 마지막으로 붙잡은 시각(상한 정리용)
         self._urls: dict[int, tuple[str, str]] = {}   # 카메라 -> (원본, 저화질)
         self._stream_info: dict[int, object] = {}
         self._lock = asyncio.Lock()
@@ -118,9 +130,13 @@ class StreamManager:
 
             self._main_holders[camera_id] = self._main_holders.get(camera_id, 0) + 1
             self._main_idle_at.pop(camera_id, None)
+            self._main_used[camera_id] = time.monotonic()
             worker = self._main.get(camera_id)
             if worker is not None and worker.alive:
                 return worker
+
+            # 새로 띄우기 전에 상한을 맞춘다.
+            self._evict_main_locked(keep=camera_id)
 
             s = get_settings()
             worker = CameraWorker(
@@ -136,6 +152,29 @@ class StreamManager:
             self._main[camera_id] = worker
             log.info("고화질 워커 기동: 카메라 %d", camera_id)
             return worker
+
+    def _evict_main_locked(self, keep: int) -> None:
+        """고화질 워커 수를 상한 안으로 되돌린다. **락을 쥔 채** 부른다.
+
+        내리는 일 자체는 reap_main 에 맡긴다 — 만료 시각을 과거로 돌려 두기만 한다.
+        여기서 join 하면 매니저 락을 쥔 채 몇 초를 붙잡아 화면 전환이 그대로 멎는다.
+
+        희생자는 '아무도 안 보는 것(유예 중)' 을 먼저 고른다. 화면을 바꾸는 평상시에는
+        직전 카메라가 여기 해당하므로, 보고 있는 쪽을 건드리는 일이 없다.
+        """
+        live = [c for c in self._main if c != keep]
+        while len(live) + 1 > MAX_MAIN_WORKERS:
+            idle = [c for c in live if not self._main_holders.get(c)]
+            victim = min(idle or live, key=lambda c: self._main_used.get(c, 0.0))
+            live.remove(victim)
+            self._main_holders.pop(victim, None)
+            self._main_idle_at[victim] = 0.0          # 다음 reap 에서 내려간다
+            if not idle:
+                # 아직 보고 있는 연결이 있는데 내린다. 그 화면은 검어지지 않고 저화질로
+                # 이어 받는다(mjpeg.gen 이 매번 워커를 다시 고른다).
+                log.warning("고화질 워커가 상한(%d)을 넘어 카메라 %d 를 내립니다 — "
+                            "보고 있던 연결은 저화질로 내려갑니다",
+                            MAX_MAIN_WORKERS, victim)
 
     async def release_main(self, camera_id: int) -> None:
         """자리를 놓는다. 마지막이면 곧바로 내리지 않고 유예를 준다."""
@@ -170,6 +209,7 @@ class StreamManager:
                     self._main_idle_at[cid] = now + 5.0
                     continue
                 self._main.pop(cid, None)
+                self._main_used.pop(cid, None)
                 log.info("고화질 워커 정지: 카메라 %d", cid)
 
     async def sync(self, session: AsyncSession) -> None:
