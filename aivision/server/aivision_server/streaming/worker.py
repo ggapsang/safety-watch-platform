@@ -38,9 +38,11 @@ class CameraWorker:
     def __init__(self, camera_id: int, source: str, *, label: str = "",
                  reconnect_sec: float = 3.0, read_timeout_sec: float = 10.0,
                  ffmpeg_options: str = "", jpeg_quality: int = 75,
-                 max_width: int = 1280, target_fps: float = 12.0) -> None:
+                 max_width: int = 1280, target_fps: float = 12.0,
+                 decode_threads: int = 0) -> None:
         self.camera_id = camera_id
         self.source = source
+        self.decode_threads = decode_threads
         self.label = label or f"cam{camera_id}"
         self.reconnect_sec = reconnect_sec
         self.read_timeout_sec = read_timeout_sec
@@ -89,7 +91,7 @@ class CameraWorker:
         `self._thread = None` 으로 참조를 버렸다. 스레드가 cap.read() 안에 갇혀 있으면
         정지 신호를 볼 기회가 없는데, 부르는 쪽은 멈춘 줄 알고 같은 카메라에 새 워커를
         띄운다. 그러면 같은 스트림을 두 디코더가 빨아들이고, 서로 밀려 또 타임아웃이
-        나고, 또 하나가 늘어난다 — 6일 만에 카메라 6대에 디코더가 16개가 됐다.
+        나고, 또 하나가 늘어날 수 있다.
 
         버려진 스레드는 아무도 가리키지 않으니 회수할 방법도 없다. 그래서 참조를
         남긴다. `alive` 를 보고 부르는 쪽이 새로 띄울지 판단한다(manager.sync).
@@ -124,7 +126,12 @@ class CameraWorker:
         src: str | int = self.source
         if isinstance(src, str) and src.isdigit():
             src = int(src)                       # 웹캠 인덱스(개발용)
-        cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG if isinstance(src, str) else cv2.CAP_ANY)
+        # 디코더 스레드 수를 못 박는다. 안 주면 FFmpeg 이 코어 수(16)만큼 띄우고, 재연결할
+        # 때마다 16개가 새로 생겨 glibc 아레나가 불어난다(config.rtsp_decode_threads 참조).
+        params = ([cv2.CAP_PROP_N_THREADS, self.decode_threads]
+                  if self.decode_threads > 0 and isinstance(src, str) else [])
+        cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG if isinstance(src, str) else cv2.CAP_ANY,
+                               params)
         if cap.isOpened():
             try:
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)

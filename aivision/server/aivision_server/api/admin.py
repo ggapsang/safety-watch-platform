@@ -165,6 +165,33 @@ async def system_status(session: AsyncSession = Depends(get_session)) -> dict:
     }
 
 
+@router.get("/system/process")
+async def process_status() -> dict:
+    """감시 모듈(ops-watchdog)이 30초마다 읽는 창구. **DB 를 보지 않는다.**
+
+    /system 은 DB 집계와 미디어 서버 조회가 붙어 무겁다. 감시가 자주 두드리는 곳이 무거우면
+    감시가 곧 부하가 된다 — 프로세스 안에서 바로 셀 수 있는 것만 담는다.
+
+    이것이 없었을 때는 '느려졌다' 는 말을 듣고서야 그 순간 한 장면을 찍어 봤다. 언제부터
+    오르기 시작했는지, 무엇과 같이 올랐는지를 알 길이 없었다.
+    """
+    from ..services import memory
+    from ..services.bus import bus
+
+    streams = manager.statuses()
+    return {
+        "memory": memory.snapshot(),
+        "streams": {
+            "total": len(streams),
+            "connected": sum(1 for v in streams.values() if v.get("connected")),
+            "reconnects": sum(int(v.get("reconnects", 0)) for v in streams.values()),
+            "fps": {str(k): v.get("fps", 0) for k, v in streams.items()},
+        },
+        "main_workers": manager.main_status(),
+        "ws_subscribers": bus.subscriber_count,
+    }
+
+
 @router.post("/system/record/purge")
 async def purge_recordings(session: AsyncSession = Depends(get_session)) -> dict:
     """상시 녹화 용량 정리를 지금 실행한다.

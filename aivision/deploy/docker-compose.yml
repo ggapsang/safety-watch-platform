@@ -19,10 +19,22 @@
 #      기본으로 꺼 두면 클론한 쪽에서 '기능이 없다' 로 보인다.
 name: aivision
 
+# ── 모든 서비스가 같이 쓰는 것 ───────────────────────────────────────────
+#
+# 로그는 **반드시 순환시킨다.** 예전에는 설정이 없어 무한히 쌓였다 — 미디어 서버 로그가
+# 12일 만에 514MB 가 됐고, 그것을 검색하는 것만으로 몇 분이 걸려 장애를 보는 일 자체가
+# 막혔다. 20MB × 5개 = 서비스당 최대 100MB.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   base-db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aivision}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aivision}
@@ -44,6 +56,7 @@ services:
   base-broker:
     image: eclipse-mosquitto:2
     restart: unless-stopped
+    logging: *default-logging
     ports:
       # MQTT TCP 는 표준 포트(1883)를 그대로 쓴다. 카메라의 기본값이 1883 이라,
       # 여기를 옮기면 현장 카메라마다 설정을 바꿔야 한다. 포트 충돌은 이 PC 안의 문제일 뿐이고
@@ -64,6 +77,7 @@ services:
   base-media:
     image: bluenviron/mediamtx:latest
     restart: unless-stopped
+    logging: *default-logging
     environment:
       TZ: ${TZ:-Asia/Seoul}
     ports:
@@ -104,6 +118,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       base-db:
         condition: service_healthy
@@ -111,8 +126,20 @@ services:
         condition: service_started
       base-media:
         condition: service_started
+    # 한 컨테이너가 가상머신 전체를 먹지 못하게 막는 마지막 선. 넘으면 커널이 이 컨테이너를
+    # 죽이고 restart 정책이 다시 띄운다. 평소(수백 MB)보다 훨씬 위에 두어 정상 운전에서는
+    # 닿지 않게 한다 — 그 전에 ops-watchdog 이 더 낮은 선(2GB)에서 점잖게 재기동한다.
+    mem_limit: 3g
     environment:
       TZ: ${TZ:-Asia/Seoul}
+      # **malloc 아레나를 둘로 묶는다.** 이 서버가 느려지고 카메라가 끊긴 가장 큰 원인이다.
+      #
+      # glibc 는 스레드마다 아레나를 붙여 최대 8×코어(=128개)까지 만들고, 스레드가 사라져도
+      # 아레나는 남아 제 최고점을 붙든다. 재연결·고화질 전환 때마다 디코더가 스레드를 새로
+      # 만들어 아레나가 하나씩 불었고, 31시간에 519MB → 1.5GB(그중 아레나 1,234MB)가 됐다.
+      # 같은 부하를 재현해 보니 둘로 묶으면 메모리가 58% 덜 들었다(208MB → 87MB).
+      # 스레드 경합이 조금 늘지만, 이 서버의 병목은 할당이 아니라 디코딩이다.
+      MALLOC_ARENA_MAX: "2"
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aivision}:${POSTGRES_PASSWORD:-aivision}@base-db:5432/${POSTGRES_DB:-aivision}
       # 서버는 컨테이너 네트워크 안에서 붙으므로 항상 표준 포트다.
       # (위 ports: 의 호스트 포트는 '바깥에서 보이는 주소'일 뿐 여기와 무관하다.)
@@ -202,6 +229,10 @@ services:
       # 모듈 자기 화면·API. 플랫폼 탭이 이 주소를 감싼다.
       - "${YOLO_UI_PORT:-11990}:8000"
     restart: unless-stopped
+    logging: *default-logging
+    # 마지막 선. 평소(수 GB — ONNX 세션 여섯 개와 CUDA 버퍼)보다 한참 위에 둔다.
+    # 그 전에 ops-watchdog 이 6GB 에서 점잖게 재기동한다.
+    mem_limit: 8g
     depends_on:
       base-app:
         condition: service_started
@@ -211,6 +242,9 @@ services:
         condition: service_started
     environment:
       TZ: ${TZ:-Asia/Seoul}
+      # malloc 아레나를 둘로 묶는다(base-app 의 같은 줄 참조). 객체감지는 4.9GB 중
+      # 3,632MB 가 아레나였다 — 재연결 때마다 디코더 스레드가 새로 생겨 불어난 것이다.
+      MALLOC_ARENA_MAX: "2"
       # 컨테이너 네트워크 안에서 붙는다. 원격 PC 에서 돌릴 때는 호스트 주소로 바꾼다.
       PLATFORM_URL: http://base-app:8000
       MQTT_HOST: base-broker
@@ -277,6 +311,7 @@ services:
       context: ../modules
       dockerfile: onvif_meta/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       base-app:
         condition: service_started
@@ -284,8 +319,10 @@ services:
         condition: service_started
       base-media:
         condition: service_started
+    mem_limit: 1g
     environment:
       TZ: ${TZ:-Asia/Seoul}
+      MALLOC_ARENA_MAX: "2"
       PLATFORM_URL: http://base-app:8000
       MQTT_HOST: base-broker
       MQTT_PORT: "1883"
@@ -323,6 +360,7 @@ services:
       # 플러그인 자기 화면·API. 플랫폼 탭이 이 주소를 감싼다.
       - "${COLLISION_UI_PORT:-12010}:8000"
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       base-app:
         condition: service_started
@@ -332,8 +370,10 @@ services:
       # 위험 구역·임계값 등 화면에서 고친 설정. 플러그인이 자기 설정을 자기가 보관한다
       # (코어에 저장하는 길은 없다 — 있으면 코어가 플러그인의 설정 모양을 알게 된다).
       - collision-config:/config
+    mem_limit: 512m
     environment:
       TZ: ${TZ:-Asia/Seoul}
+      MALLOC_ARENA_MAX: "2"
       # 컨테이너 네트워크 안에서 붙는다. 원격 PC 에서 돌릴 때는 호스트 주소로 바꾼다.
       PLATFORM_URL: http://base-app:8000
       MQTT_HOST: base-broker
@@ -353,6 +393,38 @@ services:
       RISK_ITEM: ${COLLISION_RISK_ITEM:-COLLISION_RISK}
       COLLISION_ITEM: ${COLLISION_COLLISION_ITEM:-COLLISION}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  # 감시·기록·자동 복구. (ops/watchdog/watchdog.py 머리말 참조)
+  #
+  # base-* 도 mod-* 도 아닌 **ops-*** 다. 플랫폼 기능이 아니고 분석 모듈도 아니다 —
+  # 스택 전체를 밖에서 지켜보는 쪽이라 이름을 따로 둔다. 꺼도 플랫폼은 그대로 돌지만,
+  # 그러면 밤사이 무엇이 일어났는지 아무도 모르게 된다.
+  #
+  # 30초마다 컨테이너별 메모리·CPU, 가상머신 여유 메모리, 카메라 연결, 추론 진척을
+  # OPS_LOG_PATH 에 날짜별로 남긴다. 선을 연달아 넘으면 해당 컨테이너를 재기동하고,
+  # 그 사실을 actions.jsonl 에 적는다. 6시간에 4번을 넘기면 스스로 손을 뗀다.
+  ops-watchdog:
+    build:
+      context: ../ops/watchdog
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      COMPOSE_PROJECT: aivision
+      INTERVAL_SEC: ${WATCHDOG_INTERVAL_SEC:-30}
+      # true 면 재기동하지 않고 '했을 것' 만 적는다. 선을 새로 잡을 때 며칠 이렇게 돌려 본다.
+      DRY_RUN: ${WATCHDOG_DRY_RUN:-false}
+      BASE_APP_MEM_SOFT_MB: ${WATCHDOG_BASE_APP_MEM_MB:-2000}
+      YOLO_MEM_SOFT_MB: ${WATCHDOG_YOLO_MEM_MB:-6000}
+      VM_MIN_AVAILABLE_MB: ${WATCHDOG_VM_MIN_AVAILABLE_MB:-1500}
+    volumes:
+      # 재기동하려면 도커를 쥐어야 한다. 즉 이 컨테이너는 호스트의 도커 전체를 다룰 수 있다.
+      # 단일 호스트 현장이라 그렇게 두지만, 여러 사람이 쓰는 호스트라면 다시 봐야 한다.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 기록을 남길 호스트 폴더. 녹화(RECORD_PATH)와 같은 이유로 기본값을 두지 않는다 —
+      # 볼륨에 쌓이면 정작 들여다봐야 할 때 탐색기로 열 수가 없다.
+      - ${OPS_LOG_PATH:?.env 의 OPS_LOG_PATH 에 감시 기록을 남길 호스트 폴더 경로를 넣으세요 (예 C:/aivision-ops)}:/ops
 
 # 볼륨 이름은 서비스 이름을 따라 바꾸지 않는다. 볼륨은 이름으로 찾으므로, 바꾸는 순간
 # 새 빈 볼륨이 생기고 기존 DB·녹화가 통째로 사라진다. 이름이 옛 서비스명을 닮은 것은

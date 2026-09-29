@@ -184,7 +184,11 @@ class YoloSource(_Base):
         url = item.stream_for(prefer_sub=self.cfg.prefer_sub_stream)
         if not url:
             raise RuntimeError("일감에 스트림 주소가 없습니다")
-        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+        # 디코더 스레드 수를 못 박는다. 안 주면 FFmpeg 이 코어 수(16)만큼 띄우고, 재연결할
+        # 때마다 16개가 새로 생겨 glibc 아레나가 불어난다(_sdk.config.decode_threads 참조).
+        params = ([cv2.CAP_PROP_N_THREADS, self.cfg.decode_threads]
+                  if self.cfg.decode_threads > 0 else [])
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG, params)
         if not cap.isOpened():
             cap.release()
             raise RuntimeError(f"스트림을 열 수 없습니다: {url}")

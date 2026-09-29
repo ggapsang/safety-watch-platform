@@ -114,6 +114,14 @@ class StreamManager:
     def statuses(self) -> dict[int, dict]:
         return {cid: w.status() for cid, w in self._workers.items()}
 
+    def main_status(self) -> dict:
+        """고화질 워커 현황. 감시 모듈이 '안 내려가는 워커' 를 알아채는 데 쓴다."""
+        return {
+            "count": len(self._main),
+            "limit": MAX_MAIN_WORKERS,
+            "holders": {str(c): self._main_holders.get(c, 0) for c in self._main},
+        }
+
     # ── 고화질 워커 (볼 때만) ────────────────────────────────────────
 
     async def acquire_main(self, camera_id: int) -> CameraWorker | None:
@@ -147,6 +155,7 @@ class StreamManager:
                 jpeg_quality=s.jpeg_quality,
                 max_width=s.stream_max_width,
                 target_fps=s.stream_fps,
+                decode_threads=s.rtsp_decode_threads_main,
             )
             worker.start()
             self._main[camera_id] = worker
@@ -244,8 +253,7 @@ class StreamManager:
             #
             # **끝나지 않은 워커는 목록에 남긴다.** 예전에는 pop 으로 먼저 빼고 stop 을
             # 불러, 스레드가 아직 살아 있어도 다음 줄에서 새 워커를 띄웠다. 같은 스트림을
-            # 두 디코더가 빨아들이면 서로 밀려 또 타임아웃이 나고 또 하나가 는다 —
-            # 6일 만에 카메라 6대에 디코더가 16개까지 늘어난 경로가 이것이다.
+            # 두 디코더가 빨아들이면 서로 밀려 또 타임아웃이 나고 또 하나가 늘 수 있다.
             for cid in list(self._workers):
                 if cid in wanted and self._sources.get(cid) == wanted[cid]:
                     continue
@@ -275,6 +283,9 @@ class StreamManager:
                     jpeg_quality=s.jpeg_quality,
                     max_width=s.stream_max_width,
                     target_fps=s.stream_fps,
+                    # 저화질 상시 워커는 원본보다 적게. 이것이 여섯 대라 합이 크다.
+                    decode_threads=(s.rtsp_decode_threads if url != self._urls.get(cid, ("",))[0]
+                                    else s.rtsp_decode_threads_main),
                 )
                 worker.start()
                 self._workers[cid] = worker

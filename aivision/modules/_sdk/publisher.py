@@ -32,6 +32,10 @@ class Publisher:
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                                   client_id=f"{client_id}-pub")
         self.client.reconnect_delay_set(min_delay=1, max_delay=30)
+        # 브로커가 안 보이는 동안 paho 는 보낼 메시지를 안에 쌓는다 — 기본은 **무제한**이다.
+        # 라이브 박스는 초당 여러 개라 브로커가 몇 분만 멈춰도 수천 개가 메모리에 남는다.
+        # 위 머리말대로 늦게 도착한 라이브 박스는 의미가 없으므로 상한을 두고 넘치면 버린다.
+        self.client.max_queued_messages_set(1000)
         self.client.on_connect = lambda *_: log.info("브로커 연결: %s:%d", host, port)
         self.client.on_disconnect = lambda *_: log.warning("브로커 연결 끊김 — 재연결 시도")
         self.host, self.port = host, port

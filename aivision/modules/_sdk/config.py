@@ -59,12 +59,20 @@ class BaseConfig:
     #
     # **timeout 을 빼면 안 된다.** 기본값이 0(무한)이라, 카메라가 TCP 연결만 열어 둔 채
     # 조용해지면 cap.read() 가 영영 돌아오지 않는다. 그 워커 스레드는 정지 신호를 볼
-    # 기회조차 없어 디코더를 쥔 채 남고, 그 자리에 새 워커가 떠서 같은 스트림을 또 연다.
-    # 객체감지에서 실제로 그렇게 62개 스레드가 쌓였다.
+    # 기회조차 없어 디코더를 쥔 채 남는다. 객체감지는 한때 이 옵션을 아예 넘기지 않았다.
     #
     # tcp 도 함께 못 박는다. 기본은 UDP 라 패킷이 새면 디코더가 깨진 프레임을 계속
     # 물고 늘어진다.
     rtsp_options: str = "rtsp_transport;tcp|buffer_size;1024000|timeout;5000000"
+    # 디코더 하나가 쓸 스레드 수. 0 이면 FFmpeg 이 코어 수(16)만큼 띄운다.
+    #
+    # 스레드를 줄인다고 디코딩 총량이 줄지는 않는다. 줄어드는 것은 **메모리**다. glibc 는
+    # 스레드마다 malloc 아레나를 붙이고 스레드가 사라져도 아레나는 남는다. 재연결 때마다
+    # 디코더가 16개를 새로 띄워 아레나가 불었고, 객체감지가 4.9GB 까지 올랐다(실측:
+    # 익명 메모리 4,754MB 중 아레나 3,632MB). 스트림을 여는 모듈은 이 값을 넘겨야 한다.
+    decode_threads: int = 2
+    # 해제된 메모리를 OS 에 돌려주는 주기(malloc_trim, 초). 0 이면 끈다.
+    memory_trim_sec: float = 600.0
 
     # 모델 클래스·메타데이터 클래스 -> 플랫폼 탐지 항목 코드
     class_map: dict[str, str] = field(default_factory=dict)
@@ -95,6 +103,8 @@ class BaseConfig:
         self.rtsp_options = env("RTSP_OPTIONS", self.rtsp_options)
         if self.rtsp_options:
             os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", self.rtsp_options)
+        self.decode_threads = int(num("DECODE_THREADS", self.decode_threads))
+        self.memory_trim_sec = num("MEMORY_TRIM_SEC", self.memory_trim_sec)
 
 
 def class_map_from_env(name: str = "CLASS_MAP") -> dict[str, str]:

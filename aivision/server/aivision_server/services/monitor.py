@@ -24,6 +24,7 @@ from ..db import sessionmaker
 from ..models import Camera, MqttMessage
 from ..streaming.manager import manager
 from ..timeutil import age_sec
+from . import memory
 from .bus import bus
 from .settings_store import get_runtime
 
@@ -157,6 +158,7 @@ async def run() -> None:
     last_purge = 0.0
     last_heal = 0.0
     last_quota = 0.0
+    last_trim = 0.0
     loop = asyncio.get_running_loop()
     while True:
         try:
@@ -176,6 +178,12 @@ async def run() -> None:
             if loop.time() - last_quota > get_settings().record_quota_interval_sec:
                 last_quota = loop.time()
                 await _enforce_record_quota()
+            # 해제된 메모리를 OS 에 돌려준다(services/memory 참조). 모든 아레나를 훑느라
+            # 수십 ms 걸리므로 이벤트 루프가 아니라 스레드에서 한다.
+            trim_every = get_settings().memory_trim_interval_sec
+            if trim_every > 0 and loop.time() - last_trim > trim_every:
+                last_trim = loop.time()
+                await asyncio.to_thread(memory.trim)
         except asyncio.CancelledError:
             raise
         except Exception:                                    # noqa: BLE001

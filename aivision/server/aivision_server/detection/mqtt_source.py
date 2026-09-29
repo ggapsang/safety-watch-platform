@@ -100,6 +100,12 @@ class MqttInboundSource(DetectionSource):
                     username=s.mqtt_username or None,
                     password=s.mqtt_password or None,
                     keepalive=60,
+                    # 받은 메시지를 처리하기 전까지 쌓아 두는 큐. **기본은 무제한이다.**
+                    # 라이브 박스가 초당 수십 개 들어오는데, 이 프로세스가 몇 초라도 멈추면
+                    # (실제로 같은 초에 워커 7개가 타임아웃난 적이 있다) 그만큼이 여기 쌓인다.
+                    # 처리가 도착을 끝내 못 따라가면 한도 없이 는다. 넘치면 새 것을 버린다 —
+                    # 밀린 라이브 박스는 어차피 지나간 화면이다. 이벤트 전이는 다시 온다.
+                    max_queued_incoming_messages=5000,
                 ) as client:
                     self.connected = True
                     self.last_error = ""

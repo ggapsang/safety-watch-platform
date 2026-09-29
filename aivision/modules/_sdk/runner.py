@@ -16,6 +16,7 @@ import threading
 import time
 from typing import Iterator
 
+from . import memory
 from .platform import Platform, WorkItem
 from .publisher import Publisher
 
@@ -75,6 +76,7 @@ class SourceWorker(threading.Thread):
         self.published = 0
         self.last_error = ""
         self._last_live = 0.0
+        self.reconnects = 0          # 소스를 다시 연 횟수. 감시 모듈이 추이를 본다
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -113,6 +115,7 @@ class SourceWorker(threading.Thread):
                             break
                 except Exception as exc:                        # noqa: BLE001
                     self.last_error = f"{type(exc).__name__}: {exc}"[:200]
+                    self.reconnects += 1
                     log.warning("카메라 %d 소스 오류 — %.0fs 후 재시도: %s",
                                 self.item.camera_id, backoff, self.last_error)
                 finally:
@@ -171,7 +174,7 @@ class Runner:
                 #
                 # **여기서 자리를 비우면 안 된다.** 비우면 아래에서 곧바로 새 워커가
                 # 떠서 같은 스트림을 두 디코더가 빨아들인다. 서로 밀려 또 타임아웃이
-                # 나고 또 하나가 는다 — 객체감지에서 그렇게 62개가 쌓였다.
+                # 나고 또 하나가 늘 수 있다.
                 log.debug("카메라 %d 워커가 아직 정리 중입니다 — 다음 폴링에서 다시 봅니다",
                           cam_id)
                 continue
@@ -200,6 +203,11 @@ class Runner:
             "published": sum(w.published for w in self.workers.values()),
             "errors": {str(c): w.last_error for c, w in self.workers.items()
                        if w.last_error},
+            # 재연결 누계. 이것이 빠르게 오르면 스트림을 못 따라가고 있다는 뜻이고,
+            # 재연결마다 디코더 스레드가 새로 생겨 메모리가 는다.
+            "reconnects": sum(w.reconnects for w in self.workers.values()),
+            # heartbeat 로 플랫폼에 실어 보낸다. 감시 모듈이 이 숫자로 추이를 남긴다.
+            "memory": memory.snapshot(),
         }
 
     def run(self) -> None:
@@ -217,6 +225,7 @@ class Runner:
                  ", ".join(cfg.capabilities) or "없음")
 
         last_heartbeat = 0.0
+        last_trim = time.monotonic()
         while not self.stop_event.is_set():
             items = self.platform.work()
             if items is None:
@@ -232,6 +241,11 @@ class Runner:
             if now - last_heartbeat >= cfg.heartbeat_sec:
                 last_heartbeat = now
                 self.platform.heartbeat(self.status())
+            # 해제된 메모리를 OS 에 돌려준다. 이 루프는 원래 폴링 주기로 쉬는 스레드라
+            # 여기서 몇십 ms 쓰는 것은 추론 워커에 영향을 주지 않는다.
+            if cfg.memory_trim_sec > 0 and now - last_trim >= cfg.memory_trim_sec:
+                last_trim = now
+                memory.trim()
 
             self.stop_event.wait(cfg.work_poll_sec)
 
