@@ -23,12 +23,17 @@ async def stream(camera_id: int) -> StreamingResponse:
 
 
 @router.get("/{camera_id}/snapshot.jpg")
-async def snapshot(camera_id: int) -> Response:
-    """현재 프레임 1장. 목록 썸네일처럼 상시 스트림이 필요 없는 곳에서 쓴다."""
+async def snapshot(camera_id: int, w: int = 0) -> Response:
+    """현재 프레임 1장. 목록 썸네일처럼 상시 스트림이 필요 없는 곳에서 쓴다.
+
+    `w` 를 주면 그 폭까지 줄여 보낸다(목록 썸네일). 주지 않으면 원본 — 모듈이 보정이나
+    증거용으로 받아 가는 경우가 있어 기본을 바꾸지 않는다.
+    """
     worker = manager.get(camera_id)
     if worker is None:
         raise HTTPException(status_code=404, detail="스트리밍 중인 카메라가 아닙니다")
-    jpeg = worker.snapshot_jpeg()
+    w = max(0, min(int(w), 4096))
+    jpeg = worker.snapshot_jpeg(max_width=w)
     if jpeg is None:
         raise HTTPException(status_code=503, detail="아직 수신된 프레임이 없습니다")
     return Response(content=jpeg, media_type="image/jpeg",

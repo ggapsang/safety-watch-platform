@@ -20,6 +20,9 @@ import type { Camera } from "../lib/types";
 import { Dot, cx } from "./ui";
 
 const REFRESH_MS = 4000;
+// 썸네일 폭. 이 칸은 화면에서 가장 커 봐야 수백 px 이다. 상시 스트림이 원본(2560x1440)이라
+// 폭을 안 주면 한 장이 367KB 로 나간다(640 이면 약 45KB — 예전 저화질과 같은 무게).
+const THUMB_WIDTH = 640;
 
 function Thumb({ camera, active }: { camera: Camera; active: boolean }) {
   const [nonce, setNonce] = useState(0);
@@ -39,7 +42,7 @@ function Thumb({ camera, active }: { camera: Camera; active: boolean }) {
     <div className="relative aspect-video w-full overflow-hidden rounded-md bg-video-bg">
       {!offline && !failed ? (
         <img
-          src={`${api.stillUrl(camera.id)}?t=${nonce}`}
+          src={`${api.stillUrl(camera.id, THUMB_WIDTH)}&t=${nonce}`}
           alt={`${camera.name} 미리보기`}
           onError={() => setFailed(true)}
           // 끌 때 브라우저가 이미지 자체를 끌고 가면 순서 바꾸기와 뒤엉킨다.

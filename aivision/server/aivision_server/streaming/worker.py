@@ -249,8 +249,13 @@ class CameraWorker:
         with self._lock:
             return None if self._frame is None else self._frame.copy()
 
-    def snapshot_jpeg(self, quality: int = 82) -> bytes | None:
+    def snapshot_jpeg(self, quality: int = 82, max_width: int = 0) -> bytes | None:
         """현재 프레임을 JPEG 으로. 아직 수신된 프레임이 없으면 None.
+
+        `max_width` 를 주면 그 폭까지 줄인다. 상시 워커가 원본(2560x1440)을 받게 되면서
+        목록의 작은 썸네일까지 원본으로 나가 한 장이 45KB 에서 367KB 가 됐다 — 여섯 장을
+        몇 초마다 받아 푸는 것은 브라우저 몫이다. 이벤트 스냅샷처럼 원본이 필요한 곳은
+        주지 않으면 된다(기본은 원본 그대로).
 
         (프레임 확인을 cv2 import 보다 먼저 한다 — 영상이 한 장도 안 들어온 상태에서
          디코더 라이브러리 로드까지 갈 이유가 없다.)
@@ -260,6 +265,10 @@ class CameraWorker:
             return None
         import cv2
 
+        if max_width and frame.shape[1] > max_width:
+            scale = max_width / frame.shape[1]
+            frame = cv2.resize(frame, (max_width, int(round(frame.shape[0] * scale))),
+                               interpolation=cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
         return buf.tobytes() if ok else None
 

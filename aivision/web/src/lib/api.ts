@@ -182,5 +182,9 @@ export const api = {
 
   // ── 영상 ──────────────────────────────────────────────────────────
   streamUrl: (cameraId: number) => `/api/stream/${cameraId}`,
-  stillUrl: (cameraId: number) => `/api/stream/${cameraId}/snapshot.jpg`,
+  /** 한 장짜리 그림. `width` 를 주면 서버가 그 폭으로 줄여 보낸다.
+   *  목록 썸네일은 반드시 준다 — 상시 스트림이 원본(2560x1440)이라 안 주면 한 장이
+   *  수백 KB 이고, 여섯 장을 몇 초마다 받아 푸는 일이 브라우저를 무겁게 한다. */
+  stillUrl: (cameraId: number, width = 0) =>
+    `/api/stream/${cameraId}/snapshot.jpg${width ? `?w=${width}` : "?"}`,
 };
