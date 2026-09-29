@@ -212,10 +212,32 @@ class YoloSource(_Base):
         # 카메라별 모델을 걸었을 때 다른 모델의 이름이 붙는다.
         engines = self.engines
 
+        # **흘러오는 프레임은 전부 받고, 추론할 것만 꺼낸다.**
+        #
+        # 예전에는 한 장 읽고 1/3초 쉬었다. 카메라는 초당 30장을 보내는데 3장만 가져가니
+        # 나머지 27장이 밀리고, 미디어 서버는 '읽는 쪽이 너무 느리다' 며 프레임을 버린다.
+        # 기준 프레임이 빠진 H.264 는 뒤따르는 장면이 깨지고(error while decoding MB),
+        # 버티지 못한 미디어 서버가 연결을 끊는다. 실측으로 시간당 수백 번 — 카메라마다
+        # 45초에 한 번꼴로 끊기고, 그때마다 몇 초씩 탐지가 비었다. 끊기지 않을 때도 깨진
+        # 화면으로 추론하고 있었다. 재연결마다 디코더가 새로 떠서 메모리도 불었다.
+        #
+        # grab 은 해독만 하고 색 변환은 하지 않는다. 색 변환(retrieve)과 추론은 표본 시각에만
+        # 한다. 대신 해독은 전부 한다 — 카메라 한 대에 CPU 약 35%(실측, 쉬던 방식은 6%).
+        # 그 값을 치르고 끊김과 깨진 화면을 없애는 쪽을 택했다. 안전 감시에서 비는 몇 초가
+        # 더 비싸다. 이 비용을 없애려면 카메라에 추론용 저프레임 프로파일(QHD 3fps 등)을
+        # 따로 만들어 그것을 받게 하면 된다 — 그러면 받는 대로 다 쓰므로 버릴 것이 없다.
+        next_at = time.monotonic()
         while not stop.is_set():
-            ok, frame = cap.read()
-            if not ok or frame is None:
+            if not cap.grab():
                 raise RuntimeError("프레임 읽기 실패")
+            now = time.monotonic()
+            if now < next_at:
+                continue
+            # 추론이 길어져 밀렸으면 따라잡으려 몰아서 돌리지 않는다 — 지금부터 다시 센다.
+            next_at = max(next_at + self.interval, now)
+            ok, frame = cap.retrieve()
+            if not ok or frame is None:
+                raise RuntimeError("프레임 꺼내기 실패")
 
             h, w = frame.shape[:2]
 
@@ -243,9 +265,6 @@ class YoloSource(_Base):
                         found.setdefault(code, []).append(dict(box))
             self.last_found = found
             yield live
-
-            if stop.wait(self.interval):
-                break
 
 
 def _short_side_px(det, width: int, height: int) -> float:
