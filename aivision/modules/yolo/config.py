@@ -72,8 +72,9 @@ class Config(BaseConfig):
     # 추론을 꺼 둔 카메라 번호(문자열). 이 카메라는 영상도 열지 않는다.
     camera_off: set[str] = field(default_factory=set)
 
-    # 모델 이름 -> (class_map, aliases). 카메라별 모델을 쓸 때 각자의 표를 찾는 자리다.
-    model_maps: dict[str, tuple[dict[str, str], dict[str, str]]] = field(default_factory=dict)
+    # 모델 이름 -> (class_map, aliases, 끈 클래스). 카메라별 모델을 쓸 때 각자의 표를 찾는 자리다.
+    model_maps: dict[str, tuple[dict[str, str], dict[str, str], set[str]]] = field(
+        default_factory=dict)
 
     def is_off(self, camera_id: int) -> bool:
         """이 카메라는 추론하지 않기로 했나."""
@@ -86,13 +87,13 @@ class Config(BaseConfig):
             return [Path(self.models_dir) / n for n in names]
         return [self.model_path] if self.model_path else []
 
-    def maps_for(self, model_name: str) -> tuple[dict[str, str], dict[str, str]]:
-        """그 모델의 (항목 코드 표, 표시 이름 표).
+    def maps_for(self, model_name: str) -> tuple[dict[str, str], dict[str, str], set[str]]:
+        """그 모델의 (항목 코드 표, 표시 이름 표, 끈 클래스).
 
         표가 없으면 공통 설정으로 내려간다 — 모델을 막 올려 아직 아무것도 연결하지 않은
-        상태에서도 박스는 그려져야 한다.
+        상태에서도 박스는 그려져야 한다(끈 클래스도 없다).
         """
-        return self.model_maps.get(model_name, (self.class_map, self.aliases))
+        return self.model_maps.get(model_name, (self.class_map, self.aliases, set()))
 
     # ── 화면 (이 모듈만 갖는 것) ──
     serve_port: int = 8000               # 컨테이너 안에서 화면·API 를 띄우는 포트
@@ -182,4 +183,5 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
         cfg.aliases = s.alias_map(model)
 
     # 올려 둔 모델 전부의 표를 담는다. 카메라별로 다른 모델을 쓸 때 워커가 여기서 찾는다.
-    cfg.model_maps = {name: (s.class_map(name), s.alias_map(name)) for name in s.models}
+    cfg.model_maps = {name: (s.class_map(name), s.alias_map(name), s.disabled(name))
+                      for name in s.models}

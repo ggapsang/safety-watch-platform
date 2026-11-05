@@ -52,19 +52,25 @@ class ClassRow:
             그려진다 — 그래서 칸을 나눈다.
     `item`  플랫폼 탐지 항목 코드. 비우면 **이벤트를 만들지 않는다** — 박스만 그린다.
             보기만 하고 적재는 않는 클래스가 실제로 있다(사람·차량 같은 배경 객체).
+    `enabled` 끄면 그 클래스는 **박스도 그리지 않는다** — 아예 없던 것으로 친다.
+            COCO 처럼 80종을 잡는 공개 모델에서 사람만 쓰려고 넣었다. item 을 비우는
+            것과 다르다 — 그것은 '보되 적재하지 않는다' 이고, 이것은 '보지도 않는다' 다.
+            안 끄면 화면에 의자·컵·화분 박스가 뜬다.
     """
 
     key: str
     alias: str = ""
     memo: str = ""
     item: str = ""
+    enabled: bool = True
 
     @property
     def label(self) -> str:
         return self.alias or self.key
 
     def to_dict(self) -> dict:
-        return {"key": self.key, "alias": self.alias, "memo": self.memo, "item": self.item}
+        return {"key": self.key, "alias": self.alias, "memo": self.memo, "item": self.item,
+                "enabled": self.enabled}
 
 
 @dataclass
@@ -110,7 +116,11 @@ class Settings:
 
     def class_map(self, model: str) -> dict[str, str]:
         """key -> 플랫폼 항목 코드. 예전 CLASS_MAP env 와 같은 모양이다."""
-        return {r.key: r.item for r in self.rows(model) if r.item}
+        return {r.key: r.item for r in self.rows(model) if r.item and r.enabled}
+
+    def disabled(self, model: str) -> set[str]:
+        """끈 클래스의 key. 추론 결과에서 통째로 빠진다."""
+        return {r.key for r in self.rows(model) if not r.enabled}
 
     # ── 갱신 ────────────────────────────────────────────────────────
 
@@ -179,7 +189,9 @@ def _parse(data: dict) -> Settings:
             continue
         s.models[str(model)] = [
             ClassRow(key=str(r.get("key", "")), alias=str(r.get("alias", "") or ""),
-                     memo=str(r.get("memo", "") or ""), item=str(r.get("item", "") or ""))
+                     memo=str(r.get("memo", "") or ""), item=str(r.get("item", "") or ""),
+                     # 이 칸이 생기기 전에 저장된 표는 전부 '사용' 이었다
+                     enabled=bool(r.get("enabled", True)))
             for r in rows if isinstance(r, dict) and r.get("key") is not None
         ]
     return s

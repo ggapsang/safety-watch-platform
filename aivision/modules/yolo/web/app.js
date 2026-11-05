@@ -474,14 +474,21 @@ function renderClasses() {
       `<tr><td colspan="4" class="muted">이 모델에서 클래스를 읽지 못했습니다.</td></tr>`;
     return;
   }
-  $("class-rows").innerHTML = model.classes.map((c) => `<tr>
+  // 켠 클래스만 늘어놓는다. COCO 처럼 80종 중 하나만 쓰는 모델이면 꺼 둔 79줄이 표를
+  // 덮어 정작 쓰는 것이 안 보인다. 몇 개를 꺼 뒀는지는 마지막 줄에 적는다.
+  const used = model.classes.filter((c) => c.enabled !== false);
+  const off = model.classes.length - used.length;
+  $("class-rows").innerHTML = (used.length ? used.map((c) => `<tr>
       <td><code>${esc(c.key)}</code></td>
       <td>${c.alias ? esc(c.alias) : `<span class="muted">${esc(c.key)}</span>`}</td>
       <td class="muted">${c.memo ? esc(c.memo) : "-"}</td>
       <td>${c.item
         ? esc(solutionName(c.item))
         : '<span class="muted">연결 안 함 — 박스만</span>'}</td>
-    </tr>`).join("");
+    </tr>`).join("")
+    : `<tr><td colspan="4" class="muted">켠 클래스가 없습니다 — 이 모델은 아무것도 그리지 않습니다.</td></tr>`)
+    + (off ? `<tr><td colspan="4" class="muted">끈 클래스 ${off}개 — 박스도 이벤트도 없습니다.
+               '클래스 관리'에서 켤 수 있습니다.</td></tr>` : "");
 }
 
 /* ── 클래스 편집기(모달) ───────────────────────────────────────────── */
@@ -502,8 +509,11 @@ function openClassEditor(name) {
       ? [`<option value="${esc(selected)}" selected>${esc(selected)}</option>`] : [])
     .join("");
 
+  // 예전에 저장된 표에는 enabled 가 없다 — 없으면 켠 것으로 본다(서버도 같다).
+  const on = (c) => c.enabled !== false;
   $("modal-rows").innerHTML = model.classes.length
-    ? model.classes.map((c, i) => `<tr>
+    ? model.classes.map((c, i) => `<tr${on(c) ? "" : ' class="off"'}>
+        <td><input type="checkbox" data-enabled="${i}" ${on(c) ? "checked" : ""} /></td>
         <td><code>${esc(c.key)}</code></td>
         <td><input data-alias="${i}" value="${esc(c.alias)}"
                    placeholder="${esc(c.key)}" /></td>
@@ -511,16 +521,41 @@ function openClassEditor(name) {
                    placeholder="무엇을 잡는 클래스인지, 주의할 점은" /></td>
         <td><select data-item="${i}">${options(c.item)}</select></td>
       </tr>`).join("")
-    : `<tr><td colspan="4" class="muted">이 모델에서 클래스를 읽지 못했습니다.</td></tr>`;
+    : `<tr><td colspan="5" class="muted">이 모델에서 클래스를 읽지 못했습니다.</td></tr>`;
 
   $("modal-rows").querySelectorAll("input,select").forEach((el) => {
     el.oninput = () => { dirty = true; };
   });
+  $("modal-rows").querySelectorAll("[data-enabled]").forEach((box) => {
+    box.onchange = () => {
+      dirty = true;
+      box.closest("tr").classList.toggle("off", !box.checked);
+      countEnabled();
+    };
+  });
+  countEnabled();
   msg("class-msg", "");
   $("class-modal").hidden = false;
-  const first = $("modal-rows").querySelector("input");
+  const first = $("modal-rows").querySelector("input[data-alias]");
   if (first) first.focus();
 }
+
+function countEnabled() {
+  const boxes = [...$("modal-rows").querySelectorAll("[data-enabled]")];
+  $("class-count").textContent = boxes.length
+    ? `${boxes.filter((b) => b.checked).length} / ${boxes.length}개 사용` : "";
+}
+
+function setAllEnabled(value) {
+  $("modal-rows").querySelectorAll("[data-enabled]").forEach((box) => {
+    box.checked = value;
+    box.closest("tr").classList.toggle("off", !value);
+  });
+  dirty = true;
+  countEnabled();
+}
+$("class-all-on").onclick = () => setAllEnabled(true);
+$("class-all-off").onclick = () => setAllEnabled(false);
 
 function closeClassEditor() {
   if (dirty && !confirm("저장하지 않은 내용이 있습니다. 닫을까요?")) return;
@@ -545,7 +580,12 @@ $("save-classes").onclick = async () => {
     alias: val(`[data-alias="${i}"]`),
     memo: val(`[data-memo="${i}"]`),
     item: val(`[data-item="${i}"]`),
+    enabled: !!(document.querySelector(`[data-enabled="${i}"]`) || { checked: true }).checked,
   }));
+  if (rows.length && !rows.some((r) => r.enabled)
+      && !confirm("모든 클래스를 껐습니다. 이 모델은 아무것도 그리지 않게 됩니다. 저장할까요?")) {
+    return;
+  }
   msg("class-msg", "저장 중…");
   try {
     await api(`/api/models/${model.name}/classes`, {

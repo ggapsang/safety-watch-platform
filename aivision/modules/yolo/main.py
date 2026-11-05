@@ -141,7 +141,7 @@ class YoloSource(_Base):
 
     def __init__(self, cfg, item: WorkItem) -> None:
         super().__init__(cfg, item)
-        # (모델, 표시 이름 표) 쌍들. 한 카메라에 모델을 여러 개 걸 수 있다.
+        # (모델, 표시 이름 표, 끈 클래스) 묶음들. 한 카메라에 모델을 여러 개 걸 수 있다.
         self.engines: list[tuple] = []
         self.cap = None
 
@@ -170,12 +170,12 @@ class YoloSource(_Base):
                     raise RuntimeError(f"모델 파일이 없습니다: {path}")
                 # 클래스 표도 모델별이다. 한 모델의 표를 다른 모델에 씌우면 라벨과 항목이
                 # 엉뚱하게 붙는다 — 인덱스는 맞는데 뜻이 다른, 가장 찾기 어려운 고장이다.
-                class_map, aliases = self.cfg.maps_for(path.name)
+                class_map, aliases, disabled = self.cfg.maps_for(path.name)
                 self.engines.append((
                     inference.load(path, self.cfg.device, self.cfg.imgsz,
                                    self.cfg.conf_thres, self.cfg.iou_thres,
                                    class_map, self.cfg.layout),
-                    aliases))
+                    aliases, disabled))
             if self.cfg.camera_models.get(str(item.camera_id)):
                 log.info("카메라 %d 전용 모델: %s", item.camera_id,
                          ", ".join(p.name for p in paths))
@@ -248,8 +248,12 @@ class YoloSource(_Base):
             # 한 프레임을 모델마다 한 번씩 본다. 결과는 그냥 합친다 — 모델끼리 겹치는
             # 박스를 지우지 않는다. 서로 다른 것을 찾으라고 두 모델을 건 것인데 임의로
             # 합쳐 버리면, 왜 한쪽 판정이 사라졌는지 화면에서 알 길이 없다.
-            for model, aliases in engines:
+            for model, aliases, disabled in engines:
                 for det in model.infer(frame):
+                    # 화면에서 끈 클래스는 없던 것으로 친다 — 박스도 이벤트도 없다.
+                    # 80종을 잡는 공개 모델(COCO)에서 사람만 쓰는 경우가 그렇다.
+                    if disabled and det.label in disabled:
+                        continue
                     if min_px and _short_side_px(det, w, h) < min_px:
                         # 작은 이물질(볼트·나사류)을 무시하고 싶을 때 쓴다. 학습 라벨에서
                         # 빼는 것보다 여기서 거르는 편이 낫다 — 사내 실험에서 라벨을 지우면
