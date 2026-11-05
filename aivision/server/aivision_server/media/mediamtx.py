@@ -101,6 +101,7 @@ class MediaMTXBackend(MediaBackend):
         # 하나 아끼는 편이 낫다. 주 스트림과 달리 녹화도 감시도 걸려 있지 않다.
         sub_url = rtsp_url(camera, sub=True)
         sub_name = path_name(camera.id, sub=True)
+        sub_ok = False
         if sub_url:
             sub_ok, sub_body = await self._put_path(sub_url and sub_name, sub_url,
                                                     on_demand=True)
@@ -110,8 +111,17 @@ class MediaMTXBackend(MediaBackend):
             # 경로를 지웠다면 미디어 서버에서도 내린다. 남겨 두면 죽은 경로가 쌓인다.
             await self._call("DELETE", f"/v3/config/paths/delete/{sub_name}")
 
-        info = await self.stream_info(camera.id)
-        return info or self._urls(name)
+        info = await self.stream_info(camera.id) or self._urls(name)
+        # **방금 써넣는 데 성공한 보조 경로는 조회 결과와 무관하게 있는 것으로 본다.**
+        #
+        # 미디어 서버의 설정 API 는 add 에 200 을 돌려준 직후 잠깐 동안 get 에 404 를 낸다
+        # (설정 반영이 비동기다). 그 404 를 믿고 '보조 경로 없음' 으로 기억한 적이 있다 —
+        # 앱도 객체감지도 원본 30fps 로 내려갔고, 아무도 안 찾는 보조 경로는 on-demand 라
+        # 영영 열리지 않았다. 여섯 대 중 한 대만 타이밍이 나빠 그랬다. 내가 방금 성공한
+        # 쓰기를 남의 늦은 조회로 뒤집지 않는다.
+        if sub_ok and not info.rtsp_sub:
+            info.rtsp_sub = self._urls(name, sub=True).rtsp_sub
+        return info
 
     async def _put_path(self, name: str, source: str, *,
                         on_demand: bool = False) -> tuple[bool, Any]:

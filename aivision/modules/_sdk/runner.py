@@ -142,6 +142,11 @@ class SourceWorker(threading.Thread):
                      self.item.camera_id, self.frames, self.published)
 
 
+def _same_work(a: WorkItem, b: WorkItem) -> bool:
+    """워커를 다시 띄워야 할 만큼 일감이 달라졌나. 이름·위치처럼 보여 주기만 하는 값은 보지 않는다."""
+    return (a.rtsp, a.rtsp_sub, a.options) == (b.rtsp, b.rtsp_sub, b.options)
+
+
 class Runner:
     """모듈 본체. `make_source` 는 워커마다 새 소스를 만들어 준다."""
 
@@ -166,6 +171,15 @@ class Runner:
         for cam_id in list(self.workers):
             worker = self.workers[cam_id]
             if cam_id in wanted and worker.is_alive():
+                if not _same_work(worker.item, wanted[cam_id]):
+                    # 같은 카메라인데 일감이 바뀌었다(스트림 주소·옵션). 멈추라고만 알리고,
+                    # 실제로 끝나면 다음 폴링에서 새 일감으로 다시 띄운다(아래 경로).
+                    #
+                    # 예전에는 살아 있는 워커를 그대로 두었다. 그래서 처음 받은 일감에
+                    # 영영 묶였다 — 보조 경로가 뒤늦게 생겨도 원본 30fps 를 계속 받았고,
+                    # 한때 옵션에 실어 보낸 값도 워커가 죽기 전까지 반영되지 않았다.
+                    log.info("카메라 %d 일감이 바뀌어 워커를 다시 띄웁니다", cam_id)
+                    worker.stop()
                 continue
             worker.stop()
             if worker.is_alive():

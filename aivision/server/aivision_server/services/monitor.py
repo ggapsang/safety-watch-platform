@@ -17,7 +17,7 @@ import contextlib
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 
 from ..config import get_settings
 from ..db import sessionmaker
@@ -126,12 +126,25 @@ async def _heal_media_paths() -> None:
         return                      # 미디어 서버 자체가 안 보인다. 복구는 그쪽이 살아난 뒤
 
     async with sessionmaker()() as session:
-        want = int((await session.execute(
-            select(func.count(Camera.id)).where(Camera.enabled.is_(True)))).scalar() or 0)
-        if want == 0 or health.streams >= want:
+        cams = (await session.execute(
+            select(Camera).where(Camera.enabled.is_(True)))).scalars().all()
+        want = len(cams)
+        # DB 에는 보조 경로가 있는데 매니저는 '없다' 고 기억하는 카메라.
+        #
+        # 미디어 서버가 막 떴을 때 경로를 만든 직후 조회하면 잠깐 404 가 나서, 그것을 믿고
+        # 보조 경로가 없는 것으로 적어 둔 적이 있다(media/mediamtx.ensure_stream 참조).
+        # 그 기억은 다음 sync 까지 바뀌지 않고, 그동안 앱도 모듈도 원본 30fps 로 받는다.
+        # 원인은 고쳤지만 같은 모양의 어긋남이 다른 이유로 또 생길 수 있어, 여기서 맞춘다.
+        stale_sub = [c.id for c in cams if c.rtsp_path_sub
+                     and not getattr(manager.stream_info(c.id), "rtsp_sub", "")]
+        if want == 0 or (health.streams >= want and not stale_sub):
             return
-        log.warning("미디어 경로가 모자랍니다 (있음 %d · 필요 %d) — 다시 등록합니다",
-                    health.streams, want)
+        if stale_sub:
+            log.warning("보조 경로를 잃어버린 카메라가 있습니다 (%s) — 다시 맞춥니다",
+                        ", ".join(f"#{c}" for c in stale_sub))
+        else:
+            log.warning("미디어 경로가 모자랍니다 (있음 %d · 필요 %d) — 다시 등록합니다",
+                        health.streams, want)
         await manager.sync(session)
         # 녹화 설정도 경로에 붙어 있던 것이라 함께 날아간다. force 로 다시 민다.
         await apply_all(session, force=True)
