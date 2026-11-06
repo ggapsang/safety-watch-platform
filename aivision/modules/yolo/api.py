@@ -123,15 +123,20 @@ def create_app(cfg, runner_status: Callable[[], dict],
             raise HTTPException(status_code=404, detail=f"모델을 찾을 수 없습니다: {name}")
         return path
 
+    def _common_names() -> list[str]:
+        """지금 실제로 공통 모델로 도는 것들(파일이 있는 것만)."""
+        return [p.name for p in cfg.common_models]
+
     def _models(s: settings_module.Settings) -> list[dict]:
-        active = cfg.model_path.name if cfg.model_path else ""
+        active = set(_common_names())
         out = []
         for p in sorted(models_dir.glob("*.onnx")):
             rows = s.rows(p.name)
             out.append({
                 "name": p.name,
                 "size_mb": round(p.stat().st_size / 1024 / 1024, 1),
-                "active": p.name == active,
+                # 공통 모델로 켜져 있나. 여럿이 동시에 켜질 수 있다.
+                "active": p.name in active,
                 "note": s.notes.get(p.name, ""),
                 "classes": [r.to_dict() for r in rows],
                 # 표가 아직 없으면 화면이 '클래스를 못 읽었다' 와 '아직 안 열어 봤다' 를
@@ -149,12 +154,13 @@ def create_app(cfg, runner_status: Callable[[], dict],
         return JSONResponse({
             "module": {
                 "id": cfg.module_id, "name": cfg.module_name,
-                "mode": ("stopped" if cfg.stopped
-                         else "dry-run" if cfg.dry_run else "inference"),
-                # 실제로 있는 파일만 이름을 보여 준다. MODEL_PATH 는 '있었으면 하는 곳'
-                # 이기도 해서, 없는 이름을 띄우면 올린 줄 알고 왜 dry-run 인지 묻게 된다.
-                "model": (cfg.model_path.name
-                          if cfg.model_path and cfg.model_path.is_file() else ""),
+                # idle: 켜 둔 공통 모델도 없고 카메라별로 고른 모델도 없다 — 아무것도 안 돈다.
+                "mode": ("dry-run" if cfg.dry_run
+                         else "idle" if not cfg.models_in_use() else "inference"),
+                # 실제로 있는 파일만 이름을 보여 준다. 없는 이름을 띄우면 올린 줄 알고
+                # 왜 안 도는지 묻게 된다.
+                "models": _common_names(),
+                "model": ", ".join(_common_names()),
                 "imgsz": cfg.imgsz, "layout": cfg.layout, "device": cfg.device,
             },
             "inference": runner_status(),
@@ -221,9 +227,11 @@ def create_app(cfg, runner_status: Callable[[], dict],
         keys = names or [str(i) for i in range(count)]
         s = _load()
         s.ensure_rows(name, keys)
-        if not s.active_model:
-            # 첫 모델이면 바로 쓴다. 올려 두고 또 '사용' 을 눌러야 하면 왜 안 도는지 모른다.
-            s.active_model = name
+        if s.active_models is None:
+            # 처음 올린 모델이면 바로 쓴다. 올려 두고 또 '사용' 을 눌러야 하면 왜 안 도는지
+            # 모른다. 이미 고른 적이 있으면 건드리지 않는다 — 일부러 다 꺼 둔 현장에서
+            # 모델 하나 올렸다고 저절로 켜지면 안 된다.
+            s.active_models = [name]
         _commit(s)
         log.info("모델 업로드: %s (%.1fMB · 클래스 %d개%s)", name,
                  size / 1024 / 1024, len(keys), "" if names else " · 이름 없음")
@@ -243,7 +251,7 @@ def create_app(cfg, runner_status: Callable[[], dict],
         if work is None:
             return JSONResponse({"items": [], "error": "플랫폼에 연결하지 못했습니다"})
 
-        active = cfg.model_path.name if cfg.model_path else ""
+        common = _common_names()
 
         def row(w: dict) -> dict:
             key = str(w.get("camera_id"))
@@ -257,20 +265,13 @@ def create_app(cfg, runner_status: Callable[[], dict],
                 "models": picked,
                 "off": off,
                 # 실제로 지금 돌고 있는 모델. 세 상태(끔·공통·직접 고름)를 화면이 매번
-                # 다시 계산하지 않게 여기서 한 번만 정한다.
-                #
-                # **모듈 전체 중단을 여기서 함께 본다.** 예전에는 카메라별 끔만 봐서,
-                # 모듈이 통째로 멈춰 있는데도 표가 여섯 줄 모두 초록색으로 '돌고 있다'
-                # 고 말했다. 박스가 왜 안 그려지는지 화면 어디에서도 알 수 없었다.
-                "effective": [] if (off or s.stopped)
-                             else (picked or ([active] if active else [])),
+                # 다시 계산하지 않게 여기서 한 번만 정한다. 공통 모델을 다 꺼 뒀고 따로
+                # 고른 것도 없으면 빈 목록 — 화면이 '모델 없음' 으로 보인다.
+                "effective": [] if off else (picked or list(common)),
             }
 
         return JSONResponse({"items": [row(w) for w in (work.get("items") or [])],
-                             "active_model": active,
-                             # 표가 '꺼짐(이 카메라만)' 과 '중단됨(모듈 전체)' 을 갈라
-                             # 보여 줘야 어디를 눌러 되살릴지 알 수 있다.
-                             "stopped": s.stopped})
+                             "common_models": common})
 
     @app.put("/api/cameras/{camera_id}/models")
     async def set_camera_models(camera_id: int, body: CameraModelsIn) -> JSONResponse:
@@ -309,31 +310,39 @@ def create_app(cfg, runner_status: Callable[[], dict],
 
     @app.post("/api/models/{name}/use")
     async def use_model(name: str) -> JSONResponse:
-        """이 모델로 추론을 시작한다. 꺼 둔 상태였다면 함께 켠다."""
-        _model_file(name)
-        s = _load()
-        s.active_model = name
-        s.stopped = False
-        _commit(s)
-        log.info("적용 모델 변경: %s", name)
-        return JSONResponse({"active_model": name, "stopped": False})
+        """이 모델을 공통 모델에 **더한다.** 이미 켜 둔 다른 모델은 그대로 둔다.
 
-    @app.post("/api/models/{name}/unuse")
-    async def unuse_model(name: str) -> JSONResponse:
-        """추론을 멈춘다. 모델은 그대로 두고 쓰지 않을 뿐이다.
-
-        모델 선택(active_model)을 지우지 않는 이유: 다시 켤 때 무엇을 쓸지 사람이 또
-        고르게 하면 번거롭다. '무엇을 쓸지' 와 '지금 쓸지' 는 다른 결정이다.
+        예전에는 공통 모델이 하나라 '사용' 이 곧 '바꾸기' 였다 — 두 번째 모델을 켜면 첫
+        번째가 꺼져서, 둘 다 켜지는 줄 안 사람을 헷갈리게 했다.
         """
         _model_file(name)
         s = _load()
-        if s.active_model and s.active_model != name:
-            raise HTTPException(status_code=409,
-                                detail=f"지금 쓰는 모델이 아닙니다 (사용 중: {s.active_model})")
-        s.stopped = True
+        if s.active_models is None:
+            # 한 번도 고른 적이 없던 현장 — env 의 MODEL_PATH 로 돌던 것도 이어서 켜 둔다.
+            # 안 그러면 두 번째 모델을 켜는 순간 돌던 것이 꺼진다(바로 그 문제다).
+            s.active_models = [p.name for p in cfg.common_models]
+        if name not in s.active_models:
+            s.active_models.append(name)
         _commit(s)
-        log.info("추론 중단: %s", name)
-        return JSONResponse({"active_model": s.active_model, "stopped": True})
+        log.info("공통 모델 켬: %s (지금 %s)", name, ", ".join(s.active_models))
+        return JSONResponse({"active_models": s.active_models})
+
+    @app.post("/api/models/{name}/unuse")
+    async def unuse_model(name: str) -> JSONResponse:
+        """이 모델만 공통 모델에서 뺀다. 파일과 클래스 표는 그대로다.
+
+        다 빼면 '일부러 다 껐다' 로 남는다(빈 목록) — 따로 모델을 고르지 않은 카메라는
+        쉬고, 카메라별로 고른 카메라는 그대로 돈다. 재시작해도 env 의 모델로 되살아나지
+        않는다(settings.Settings.active_models 주석 참조).
+        """
+        _model_file(name)
+        s = _load()
+        if s.active_models is None:
+            s.active_models = [p.name for p in cfg.common_models]
+        s.active_models = [n for n in s.active_models if n != name]
+        _commit(s)
+        log.info("공통 모델 끔: %s (남은 것 %s)", name, ", ".join(s.active_models) or "없음")
+        return JSONResponse({"active_models": s.active_models})
 
     @app.post("/api/models/{name}/inspect")
     async def inspect_model(name: str) -> JSONResponse:
@@ -354,14 +363,12 @@ def create_app(cfg, runner_status: Callable[[], dict],
     async def delete_model(name: str) -> JSONResponse:
         path = _model_file(name)
         s = _load()
-        # 중단해 둔 모델은 지울 수 있다. 돌고 있는 것만 막으면 된다 —
-        # 쓰지도 않는 모델을 지우려고 다른 모델을 먼저 적용하게 만들 이유가 없다.
-        in_use = (not s.stopped) and (s.active_model == name
-                                      or (cfg.model_path and cfg.model_path.name == name))
-        if in_use:
+        # 공통 모델로 켜 둔 것만 막는다. 꺼 둔 모델을 지우려고 다른 것을 먼저 손대게 만들
+        # 이유가 없다. 카메라별로만 걸어 둔 모델은 지우면서 그 카메라에서 함께 뺀다(아래).
+        if name in _common_names():
             raise HTTPException(status_code=409,
-                                detail="쓰고 있는 모델은 지울 수 없습니다. "
-                                       "먼저 '사용 중단' 하거나 다른 모델을 적용하세요.")
+                                detail="공통 모델로 켜 둔 모델은 지울 수 없습니다. "
+                                       "먼저 '사용 중단' 하세요.")
         path.unlink()
         s.models.pop(name, None)
         # 이 모델을 걸어 둔 카메라가 있으면 거기서만 뺀다. 안 그러면 없는 파일을 가리킨 채
@@ -378,7 +385,9 @@ def create_app(cfg, runner_status: Callable[[], dict],
             log.info("카메라 %s 에서 %s 지정을 풉니다 (모델 삭제) — 남은 모델: %s",
                      cam, name, ", ".join(rest) or "(공통)")
         s.notes.pop(name, None)
-        settings_module.save(models_dir, s)
+        # 저장만 하지 않고 반영한다. 카메라별 지정에서 이 모델을 뺐으니 그 카메라의 워커가
+        # 다시 떠야 한다 — 안 그러면 지운 파일의 세션을 메모리에 쥔 채 계속 돈다.
+        _commit(s)
         log.info("모델 삭제: %s", name)
         return JSONResponse({"deleted": name})
 

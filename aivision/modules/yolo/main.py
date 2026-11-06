@@ -99,7 +99,11 @@ class DryRunSource(_Base):
 
 
 class StoppedSource(_Base):
-    """사람이 화면에서 꺼 둔 상태. 영상도 안 열고 아무것도 발행하지 않는다.
+    """아무것도 하지 않는 워커. 영상도 안 열고 아무것도 발행하지 않는다.
+
+    직접 쓰지 않고 아래 두 상태(이 카메라만 끔 · 돌릴 모델 없음)가 이것을 물려받는다.
+    예전에는 모듈 전체를 세우는 '사용 중단' 이 이것이었는데, 공통 모델을 여럿 켜고
+    끌 수 있게 되면서 전체 중단 스위치는 없어졌다.
 
     모듈을 통째로 내리지 않는 이유: 화면(11990)은 살아 있어야 다시 켤 수 있고,
     플랫폼의 모듈 목록에서도 사라지면 '고장' 과 구별되지 않는다. 등록과 heartbeat 는
@@ -123,9 +127,8 @@ class StoppedSource(_Base):
 class DisabledSource(StoppedSource):
     """이 카메라 하나만 꺼 둔 상태.
 
-    전체 중단(StoppedSource)과 뜻이 다르다 — 저쪽은 모듈 전체를 세운 것이고, 이쪽은
-    담당 카메라 중 이 한 대만 안 본다는 결정이다. 화면과 로그에서 구별되어야 '왜 이
-    카메라만 조용한가' 를 묻지 않는다.
+    담당 카메라 중 이 한 대만 안 본다는 결정이다. 화면과 로그에서 '모델 없음' 과
+    구별되어야 '왜 이 카메라만 조용한가' 를 묻지 않는다.
 
     영상도 열지 않는다. 모델도 안 연다 — 안 쓸 카메라 때문에 RTSP 연결과 ONNX 세션을
     붙들고 있으면 끈 의미가 없다.
@@ -134,6 +137,18 @@ class DisabledSource(StoppedSource):
     @property
     def device(self) -> str:
         return "사용 안 함"
+
+
+class NoModelSource(StoppedSource):
+    """이 카메라에 돌릴 모델이 없다 — 따로 고른 것도 없고, 켜 둔 공통 모델도 없다.
+
+    오류가 아니다. 공통 모델을 모두 꺼 둔 것은 사람의 결정이다. 예전처럼 '모델 파일이
+    없습니다' 로 워커가 죽었다 살아나기를 반복하면 로그만 채운다 — 조용히 기다린다.
+    """
+
+    @property
+    def device(self) -> str:
+        return "모델 없음"
 
 
 class YoloSource(_Base):
@@ -315,24 +330,28 @@ def _pick_source(cfg, item: WorkItem):
     화면과 로그가 같은 말을 하도록 _mode() 와 짝을 맞춰 둔다 — 갈라 두면 '화면은 추론인데
     실제로는 dry-run' 같은 어긋남이 생긴다.
     """
-    if cfg.stopped:
-        return StoppedSource
     if cfg.is_off(item.camera_id):
         return DisabledSource
-    return DryRunSource if cfg.dry_run else YoloSource
+    if cfg.dry_run:
+        return DryRunSource
+    if not cfg.models_for(item.camera_id):
+        return NoModelSource
+    return YoloSource
 
 
 def _mode(cfg) -> str:
-    if cfg.stopped:
-        return "중단됨"
-    return "dry-run" if cfg.dry_run else f"추론 · {cfg.model_path}"
+    if cfg.dry_run:
+        return "dry-run"
+    if not cfg.models_in_use():
+        return "켜 둔 모델 없음"
+    return "추론 · 공통 " + (", ".join(p.name for p in cfg.common_models) or "없음")
 
 
 def main(argv: list[str]) -> int:
     configure_logging()
     cfg = config_module.load()
     if "--dry-run" in argv:
-        cfg.dry_run = True
+        cfg.force_dry_run = cfg.dry_run = True
     serve = "--no-serve" not in argv
 
     log.info("모듈 %s 기동 (%s)", cfg.module_id, _mode(cfg))

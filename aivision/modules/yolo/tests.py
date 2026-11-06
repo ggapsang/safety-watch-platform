@@ -238,10 +238,10 @@ def test_settings_store() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        check(settings.load(root).active_model == "", "파일이 없으면 빈 설정")
+        check(settings.load(root).active_models is None, "파일이 없으면 '고른 적 없음'")
 
         s = settings.Settings()
-        s.active_model = "best.onnx"
+        s.active_models = ["best.onnx"]
 
         # 모델이 들고 온 클래스로 표를 세운다
         check(s.ensure_rows("best.onnx", ["no_helmet", "no_vest"]), "표를 새로 만들면 바뀐다")
@@ -275,26 +275,52 @@ def test_settings_store() -> None:
         check(s.tuning["min_box_px"] == 0.0, "아래로 넘치면 최솟값으로 자른다")
         check(s.tuning["sample_fps"] == 2.5, "범위 안이면 그대로")
 
-        # 중단은 '아직 안 골랐다'와 달라야 한다. 같은 값으로 뭉개면 껐는데도 재시작할 때
-        # env 의 모델로 되살아난다.
-        s.stopped = True
-        check(s.active_model == "best.onnx",
-              "중단해도 고른 모델은 남는다 (다시 켤 때 또 고르게 하지 않는다)")
+        # 공통 모델은 여럿이 동시에 켜진다. 하나를 켜면 다른 하나가 꺼지던 것이 문제였다.
+        s.active_models.append("person.onnx")
+        check(s.active_models == ["best.onnx", "person.onnx"], "공통 모델 둘이 함께 켜진다")
+
+        # 클래스 끄기 — 80종짜리 공개 모델에서 사람만 쓴다. 끈 클래스는 이벤트 표에서도 빠진다.
+        s.ensure_rows("person.onnx", ["person", "chair", "tv"])
+        for r in s.rows("person.onnx"):
+            r.enabled = r.key == "person"
+            r.item = "ITEM-P" if r.key in ("person", "chair") else ""
+        check(s.disabled("person.onnx") == {"chair", "tv"}, "끈 클래스")
+        check(s.class_map("person.onnx") == {"person": "ITEM-P"},
+              "끈 클래스는 탐지 항목에 연결돼 있어도 이벤트로 가지 않는다")
 
         # 저장 -> 다시 읽기
         settings.save(root, s)
         again = settings.load(root)
-        check(again.active_model == "best.onnx", "적용 모델이 남는다")
+        check(again.active_models == ["best.onnx", "person.onnx"], "공통 모델 목록이 남는다")
         check(again.alias_map("best.onnx") == s.alias_map("best.onnx"), "표시 이름이 남는다")
         check(again.class_map("best.onnx") == s.class_map("best.onnx"), "항목 매핑이 남는다")
+        check(again.disabled("person.onnx") == {"chair", "tv"}, "끈 클래스가 남는다")
         check(again.tuning["sample_fps"] == 2.5, "조정값이 남는다")
-        check(again.stopped is True, "중단 상태가 남는다")
         check({r.key: r.memo for r in again.rows("best.onnx")}["no_helmet"]
               == "2026-03 데이터로 학습. 역광에서 오탐", "메모가 남는다")
 
+        # '일부러 다 껐다' 는 '고른 적 없다' 와 달라야 한다. 같은 값으로 뭉개면 껐는데도
+        # 재시작할 때 env 의 모델로 되살아나거나 합성 박스가 뜬다.
+        s.active_models = []
+        settings.save(root, s)
+        check(settings.load(root).active_models == [], "다 끈 상태가 빈 목록으로 남는다")
+        s.active_models = None
+        settings.save(root, s)
+        check(settings.load(root).active_models is None, "고른 적 없음은 그대로 돌아온다")
+
+        # 예전 형식(공통 모델 하나 + 전체 중단 스위치)도 읽는다. 현장 설정을 날리면 안 된다.
+        old = root / settings.FILENAME
+        old.write_text('{"active_model": "best.onnx", "stopped": false}', encoding="utf-8")
+        check(settings.load(root).active_models == ["best.onnx"], "옛 형식: 켜 둔 모델 하나")
+        old.write_text('{"active_model": "best.onnx", "stopped": true}', encoding="utf-8")
+        check(settings.load(root).active_models == [], "옛 형식: 중단해 둔 것은 '다 껐다' 로")
+        old.write_text('{"models": {"m.onnx": [{"key": "a"}]}}', encoding="utf-8")
+        check(settings.load(root).rows("m.onnx")[0].enabled is True,
+              "옛 형식: 사용 칸이 없던 클래스는 켠 것으로")
+
         # 깨진 파일에 기동이 막히면 안 된다 — 현장에서 손쓸 방법이 없어진다
-        (root / settings.FILENAME).write_text("{이건 JSON 이 아니다", encoding="utf-8")
-        check(settings.load(root).active_model == "", "깨진 설정은 빈 설정으로 내려앉는다")
+        old.write_text("{이건 JSON 이 아니다", encoding="utf-8")
+        check(settings.load(root).active_models is None, "깨진 설정은 빈 설정으로 내려앉는다")
 
 
 def test_training_is_gone() -> None:

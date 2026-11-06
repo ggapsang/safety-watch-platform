@@ -58,17 +58,22 @@ async function refresh() {
 function renderNotice() {
   const m = state.module;
   const out = [];
-  if (m.mode === "stopped") {
-    out.push(`<div class="warn"><b>사용 중단</b> — 추론을 멈춰 두었습니다. 박스도 이벤트도
-      나가지 않습니다. 오른쪽 '배치된 모델' 에서 <b>사용</b> 을 누르면 다시 시작합니다.</div>`);
+  if (m.mode === "idle") {
+    out.push(`<div class="warn"><b>켜 둔 모델이 없습니다</b> — 공통 모델을 모두 꺼 두었고
+      카메라별로 고른 모델도 없어 아무것도 추론하지 않습니다. 오른쪽 '배치된 모델' 에서
+      <b>사용</b> 을 누르면 시작합니다.</div>`);
   } else if (m.mode === "dry-run") {
     out.push(`<div class="warn"><b>dry-run</b> — 모델이 없어 합성 박스를 발행하고 있습니다.
       위에서 ONNX 모델을 올리면 실제 추론으로 바뀝니다.</div>`);
   }
-  const active = (state.models || []).find((x) => x.active);
-  if (active && active.classes.length && !active.classes.some((c) => c.item)) {
-    out.push(`<div class="warn">탐지 항목에 연결된 클래스가 없습니다 —
-      박스는 그리지만 <b>이벤트는 쌓이지 않습니다</b>. 오른쪽 '탐지 대상' 에서 연결하세요.</div>`);
+  // 켜 둔 공통 모델 가운데 이벤트로 이어지는 클래스가 하나도 없는 것을 짚는다.
+  // 사람 모델처럼 박스만 보려고 켠 것도 있으니, 이름을 들어 알려 줄 뿐 막지는 않는다.
+  const noItem = (state.models || []).filter((x) => x.active && x.classes.length
+    && !x.classes.some((c) => c.item && c.enabled !== false));
+  if (noItem.length) {
+    out.push(`<div class="warn">${noItem.map((x) => `<b>${esc(x.name)}</b>`).join(", ")} —
+      탐지 항목에 연결된 클래스가 없어 박스는 그리지만 <b>이벤트는 쌓이지 않습니다</b>.
+      필요하면 '클래스 관리' 에서 연결하세요.</div>`);
   }
   $("notice").innerHTML = out.join("");
 }
@@ -77,8 +82,8 @@ function renderInference() {
   const inf = state.inference || {};
   const m = state.module;
   $("infer-kv").innerHTML = [
-    ["모드", { stopped: "사용 중단", "dry-run": "dry-run" }[m.mode] || "추론"],
-    ["모델", m.model || "-"],
+    ["모드", { idle: "켜 둔 모델 없음", "dry-run": "dry-run" }[m.mode] || "추론"],
+    ["공통 모델", (m.models || []).join(" + ") || "-"],
     ["장치", inf.device || "-"],
     ["입력 크기", m.imgsz],
     ["누적 프레임", (inf.frames ?? 0).toLocaleString()],
@@ -184,15 +189,13 @@ async function saveTuning(key, value) {
 
 function renderModels() {
   const models = state.models || [];
-  const stopped = state.module.mode === "stopped";
   const shown = currentModel();
 
   $("model-rows").innerHTML = models.length
     ? models.map((m) => {
-        // 세 상태를 구분해 보여 준다 — 돌고 있음 / 골라 뒀지만 멈춤 / 안 씀.
-        const badge = !m.active ? ""
-          : stopped ? ' <span class="pill unknown">사용 중단</span>'
-                    : ' <span class="pill on">사용 중</span>';
+        // 모델마다 따로 켜고 끈다 — 여럿이 동시에 '사용 중' 일 수 있다. 예전에는 공통
+        // 모델이 하나라 하나를 켜면 다른 하나가 꺼졌다.
+        const badge = m.active ? ' <span class="pill on">사용 중</span>' : "";
         // 표가 지금 어느 모델을 보여 주는지 행에서도 알 수 있어야 한다. 모델이 하나뿐일
         // 때 '클래스' 를 눌러도 화면이 안 바뀌어 '반응이 없다' 로 보였다.
         const here = shown && shown.name === m.name;
@@ -204,11 +207,11 @@ function renderModels() {
         <td class="num">${m.size_mb}MB</td>
         <td class="num">${m.classes.length || "-"}</td>
         <td style="white-space:nowrap">
-          ${m.active && !stopped
+          ${m.active
             ? `<button data-unuse="${esc(m.name)}">사용 중단</button>`
             : `<button class="primary" data-use="${esc(m.name)}">사용</button>`}
           <button data-show="${esc(m.name)}">클래스 관리</button>
-          ${m.active && !stopped
+          ${m.active
             ? "" : `<button class="danger" data-del="${esc(m.name)}">삭제</button>`}
         </td>
       </tr>`;
@@ -217,11 +220,11 @@ function renderModels() {
 
   $("model-rows").querySelectorAll("[data-use]").forEach((b) => {
     b.onclick = () => act(`/api/models/${b.dataset.use}/use`, "POST",
-                          `${b.dataset.use} 으로 추론을 시작합니다.`);
+                          `${b.dataset.use} 을(를) 공통 모델에 더했습니다. 켜 둔 다른 모델도 그대로 돕니다.`);
   });
   $("model-rows").querySelectorAll("[data-unuse]").forEach((b) => {
     b.onclick = () => act(`/api/models/${b.dataset.unuse}/unuse`, "POST",
-                          "추론을 멈췄습니다. 모델은 그대로 있습니다.");
+                          `${b.dataset.unuse} 만 공통 모델에서 뺐습니다. 모델 파일은 그대로 있습니다.`);
   });
   $("model-rows").querySelectorAll("[data-del]").forEach((b) => {
     b.onclick = () => {
@@ -289,7 +292,7 @@ function renderCameras(error) {
   // 누른 칸이 잠깐 원래대로 돌아갔다가 다시 바뀐다 — 눌러도 안 먹는 것처럼 보인다.
   if (cameraBusy) return;
   const models = (state?.models || []).map((m) => m.name);
-  const active = state?.module?.model || "";
+  const common = state?.module?.models || [];
 
   if (error) {
     $("camera-rows").innerHTML =
@@ -319,8 +322,10 @@ function renderCameras(error) {
       : `<span class="muted">올려 둔 모델이 없습니다</span>`;
     // 아무것도 안 골랐을 때 무엇으로 도는지 그 자리에 적는다. 안 적으면 빈 체크박스
     // 줄만 보고 '아무 모델도 안 돈다' 로 읽는다.
-    const hint = on && !picked.length && active
-      ? `<div class="why">안 고르면 공통 모델 <b>${esc(active)}</b></div>` : "";
+    const hint = !on || picked.length ? ""
+      : common.length
+        ? `<div class="why">안 고르면 공통 모델 <b>${esc(common.join(" + "))}</b></div>`
+        : `<div class="why">켜 둔 공통 모델이 없어, 여기서 고르지 않으면 이 카메라는 쉽니다</div>`;
     return `<tr>
       <td><b>${esc(c.name || c.camera_id)}</b></td>
       <td class="muted">${esc(c.location)}</td>
@@ -347,18 +352,14 @@ function renderCameras(error) {
  * 이유마다 다르다.
  */
 function effectiveLabel(c) {
-  if (state?.module?.mode === "stopped") {
-    return `<span class="pill stop">중단됨</span>
-      <div class="why">모듈 전체가 멈춰 있습니다 — '배치된 모델'에서 <b>사용</b></div>`;
-  }
   if (c.off) {
     return `<span class="pill stop">사용 안 함</span>
       <div class="why">영상도 열지 않습니다</div>`;
   }
   const running = c.effective || [];
   if (!running.length) {
-    return `<span class="pill stop">모델 없음</span>
-      <div class="why">모델을 고르거나 공통 모델을 지정하세요</div>`;
+    return `<span class="pill unknown">쉬는 중</span>
+      <div class="why">돌릴 모델이 없습니다 — 왼쪽에서 고르거나 '배치된 모델' 에서 공통 모델을 켜세요</div>`;
   }
 
   // 설정상 돌아야 하는 것과 정말 도는 것은 다르다. 스트림이 끊기면 설정은 그대로인 채
@@ -386,10 +387,10 @@ function effectiveLabel(c) {
 function renderCameraSummary() {
   const el = $("camera-summary");
   if (!el) return;
-  if (state?.module?.mode === "stopped") {
+  if (state?.module?.mode === "idle") {
     el.className = "state stop";
-    el.innerHTML = `<b>중단됨</b> — 박스도 이벤트도 나가지 않습니다.
-      오른쪽 '배치된 모델'에서 <b>사용</b>을 누르면 다시 시작합니다.`;
+    el.innerHTML = `<b>켜 둔 모델이 없습니다</b> — 박스도 이벤트도 나가지 않습니다.
+      오른쪽 '배치된 모델'에서 <b>사용</b>을 누르면 시작합니다.`;
     return;
   }
   const inf = state?.inference || {};
@@ -399,10 +400,10 @@ function renderCameraSummary() {
   // 장치는 실제로 도는 카메라들의 것만 모은다. 꺼 둔 카메라의 '사용 안 함' 이 장치
   // 이름에 섞여 들어가면 무엇으로 추론하는지가 안 읽힌다.
   const devs = [...new Set(on.map((c) => (inf.devices || {})[String(c.camera_id)])
-                             .filter((d) => d && d !== "사용 안 함"))];
+                             .filter((d) => d && d !== "사용 안 함" && d !== "모델 없음"))];
   el.className = "state" + (live ? " on" : " stop");
   el.innerHTML = `<b>${live} / ${on.length}대 동작 중</b>`
-    + ` · 공통 모델 ${esc(state?.module?.model || "없음")}`
+    + ` · 공통 모델 ${esc((state?.module?.models || []).join(" + ") || "없음")}`
     + ` · ${esc(devs.join(", ") || "-")}`
     + ` · 초당 ${state?.tuning?.sample_fps ?? "-"}장`
     + (offCount ? ` · <span class="muted">사용 안 함 ${offCount}대</span>` : "");

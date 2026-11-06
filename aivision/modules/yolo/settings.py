@@ -75,17 +75,19 @@ class ClassRow:
 
 @dataclass
 class Settings:
-    active_model: str = ""
-    # 사람이 화면에서 추론을 꺼 둔 상태.
+    # 공통 모델들 — 카메라별로 따로 고르지 않은 카메라가 **전부** 돌리는 모델.
     #
-    # active_model 을 비우는 것으로 대신하지 않는다. 빈 값은 '아직 고르지 않았다'(그래서
-    # env 를 따른다)는 뜻이라 '일부러 껐다'와 구별되지 않는다. 둘을 합치면 껐는데 재시작할
-    # 때 env 의 모델로 되살아난다.
+    # 예전에는 하나였다(active_model). 그래서 화면에서 두 번째 모델의 '사용' 을 누르면
+    # 공통 모델이 그것으로 **바뀌고** 앞의 것은 빠졌다 — 둘 다 켜지는 줄 알고 눌렀는데
+    # 하나가 꺼지니 '왜 하나를 쓰면 다른 하나가 사용 중단이 되냐' 는 말을 들었다.
+    # 모델마다 따로 켜고 끈다.
     #
-    # 끈 상태는 dry-run 과도 다르다. dry-run 은 합성 박스를 **발행한다** — 배관을 보려고
-    # 만든 모드다. 끈 것은 아무것도 내보내지 않아야 한다.
-    stopped: bool = False
-    # 카메라 번호 -> 그 카메라에 걸 모델 파일 이름들. 비어 있으면 active_model 을 쓴다.
+    # **None 과 [] 는 다르다.** None 은 '아직 한 번도 고르지 않았다' 라 env 의 MODEL_PATH 를
+    # 따르고, 그것도 없으면 dry-run 으로 배관을 보여 준다(새로 깐 현장). [] 는 '일부러 다
+    # 껐다' 라 아무것도 하지 않는다 — 둘을 합치면 껐는데 재시작할 때 env 의 모델로
+    # 되살아나거나, 껐는데 합성 박스가 화면에 뜬다.
+    active_models: list[str] | None = None
+    # 카메라 번호 -> 그 카메라에 걸 모델 파일 이름들. 비어 있으면 공통 모델들을 쓴다.
     #
     # 한 현장에서 카메라마다 보는 것이 다르다. 출입구는 사람, 작업장은 AMR 을 잡아야
     # 하는데 모델 하나를 전부에 걸면 둘 중 하나는 늘 헛돈다. 그리고 한 카메라가 둘 다
@@ -151,10 +153,8 @@ class Settings:
     # ── 직렬화 ──────────────────────────────────────────────────────
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "version": VERSION,
-            "active_model": self.active_model,
-            "stopped": self.stopped,
             "camera_models": self.camera_models,
             # 집합은 JSON 에 없다. 정렬해 내보내면 파일 차이가 눈으로 읽힌다.
             "camera_off": sorted(self.camera_off),
@@ -162,12 +162,21 @@ class Settings:
             "notes": self.notes,
             "models": {m: [r.to_dict() for r in rows] for m, rows in self.models.items()},
         }
+        # 한 번도 고르지 않았으면 열쇠 자체를 쓰지 않는다 — 다시 읽을 때 '고른 적 없음'
+        # 으로 돌아와야 한다(빈 목록으로 쓰면 '일부러 다 껐다' 가 된다).
+        if self.active_models is not None:
+            out["active_models"] = list(self.active_models)
+        return out
 
 
 def _parse(data: dict) -> Settings:
     s = Settings()
-    s.active_model = str(data.get("active_model") or "")
-    s.stopped = bool(data.get("stopped"))
+    if "active_models" in data:
+        s.active_models = [str(n) for n in (data.get("active_models") or []) if n]
+    elif data.get("active_model"):
+        # 예전 형식 — 공통 모델이 하나였고, 그 모델의 '사용 중단' 이 곧 전체 중단이었다.
+        # 중단해 둔 상태였으면 '일부러 다 껐다' 로, 아니면 그 모델 하나로 옮긴다.
+        s.active_models = [] if data.get("stopped") else [str(data["active_model"])]
     for cam, raw in (data.get("camera_models") or {}).items():
         # 예전 형식은 모델 이름 하나(문자열)였다. 목록으로 올려 읽는다 — 형식을 바꿨다는
         # 이유로 현장에서 걸어 둔 설정을 날리면 안 된다.

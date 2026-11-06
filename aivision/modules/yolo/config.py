@@ -38,7 +38,12 @@ class Config(BaseConfig):
     module_name: str = "객체감지"
 
     # ── 모델 ──
+    # env 의 MODEL_PATH. 화면에서 한 번도 고르지 않은 현장의 기본값일 뿐이다.
     model_path: Path | None = None
+    # 공통 모델들(파일이 있는 것만). 카메라별로 따로 고르지 않은 카메라가 전부 돌린다.
+    common_models: list[Path] = field(default_factory=list)
+    # env·CLI 로 dry-run 을 강제했나. 모델을 올리면 dry-run 이 풀리는데, 이것만은 남는다.
+    force_dry_run: bool = False
     device: str = "cuda"                 # cuda 불가 시 백엔드가 CPU 로 폴백한다
     imgsz: int = 640
     conf_thres: float = 0.25
@@ -58,15 +63,12 @@ class Config(BaseConfig):
     # 모순된 감독이 되기 때문이다. 학습 신호는 보존하고 **여기서 걸러야** 한다.
     min_box_px: float = 0.0
     dry_run: bool = False
-    # 화면에서 추론을 꺼 둔 상태. dry_run 과 다르다 — dry_run 은 합성 박스를 발행하고,
-    # 이것은 아무것도 발행하지 않는다(settings.Settings.stopped 주석 참조).
-    stopped: bool = False
 
     # 모델 클래스 이름 -> 사람이 붙인 이름. 화면에 그려지는 것은 이 값이다.
     # class_map(항목 코드)과 층이 다르다 — 이름은 보여 주기용, 코드는 이벤트 승격용이라
     # 하나로 합치면 '이벤트로 안 올리지만 이름은 보고 싶은' 클래스를 표현할 수 없다.
     aliases: dict[str, str] = field(default_factory=dict)
-    # 카메라 번호(문자열) -> 그 카메라에 걸 모델 파일 이름들. 비면 model_path 를 쓴다.
+    # 카메라 번호(문자열) -> 그 카메라에 걸 모델 파일 이름들. 비면 공통 모델들을 쓴다.
     # 워커마다 모델이 다를 수 있어 경로 하나로 담을 수 없다 — 표를 넘기고 워커가 고른다.
     camera_models: dict[str, list[str]] = field(default_factory=dict)
     # 추론을 꺼 둔 카메라 번호(문자열). 이 카메라는 영상도 열지 않는다.
@@ -81,11 +83,28 @@ class Config(BaseConfig):
         return str(camera_id) in self.camera_off
 
     def models_for(self, camera_id: int) -> list[Path]:
-        """이 카메라가 열 모델들. 지정이 없으면 공통 모델 하나."""
+        """이 카메라가 열 모델들. 따로 고르지 않았으면 공통 모델들(없으면 빈 목록)."""
         names = self.camera_models.get(str(camera_id)) or []
         if names:
             return [Path(self.models_dir) / n for n in names]
-        return [self.model_path] if self.model_path else []
+        return list(self.common_models)
+
+    def models_in_use(self) -> set[str]:
+        """어느 카메라에서든 돌 수 있는 모델 이름들."""
+        return ({p.name for p in self.common_models}
+                | {n for names in self.camera_models.values() for n in names})
+
+    @property
+    def capabilities(self) -> list[str]:
+        """플랫폼에 '나는 이 항목들을 판정한다' 고 알리는 목록.
+
+        쓰는 모델 **전부**의 표에서 모은다. 예전에는 공통 모델 하나의 표만 봐서, 카메라별로
+        따로 건 모델이 내는 항목은 플랫폼이 모르는 채로 들어왔다.
+        """
+        items = set(self.class_map.values())                 # env 의 초기 표
+        for name in self.models_in_use():
+            items |= set(self.model_maps.get(name, ({}, {}, set()))[0].values())
+        return sorted(items)
 
     def maps_for(self, model_name: str) -> tuple[dict[str, str], dict[str, str], set[str]]:
         """그 모델의 (항목 코드 표, 표시 이름 표, 끈 클래스).
@@ -118,7 +137,7 @@ def load() -> Config:
     cfg.sample_fps = num("SAMPLE_FPS", 3.0)
     cfg.min_box_px = num("MIN_BOX_PX", 0.0)
     cfg.prefer_sub_stream = flag("PREFER_SUB_STREAM", True)
-    cfg.dry_run = flag("DRY_RUN", False)
+    cfg.force_dry_run = cfg.dry_run = flag("DRY_RUN", False)
 
     cfg.serve_port = int(num("SERVE_PORT", 8000))
     cfg.public_url = env("PUBLIC_URL", "http://localhost:11990").rstrip("/")
@@ -128,13 +147,12 @@ def load() -> Config:
     # 들어가지 않은 현장도 그대로 돌아야 한다.
     apply_settings(cfg, settings.load(Path(cfg.models_dir)))
 
-    if not cfg.dry_run and (cfg.model_path is None or not cfg.model_path.is_file()):
+    if cfg.dry_run and not cfg.force_dry_run:
         # 죽이지 않고 dry-run 으로 내려앉는다. 모델이 아직 없는 환경에서 컨테이너가
         # 재시작을 반복하는 것보다, 배관이 도는 것을 보여 주는 편이 낫다.
         log.warning("모델 파일(%s)이 없습니다 — dry-run 으로 전환합니다. "
                     "모듈 화면(%s)에서 모델을 올리세요.", cfg.model_path, cfg.public_url)
-        cfg.dry_run = True
-    if not cfg.class_map:
+    if not cfg.capabilities:
         log.warning("클래스와 탐지 항목의 연결이 비어 있습니다 — 박스는 그리지만 이벤트는 "
                     "만들지 않습니다. 모듈 화면(%s)에서 연결하세요.", cfg.public_url)
     return cfg
@@ -150,7 +168,6 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
         if name in s.tuning:
             setattr(cfg, name, s.tuning[name])
 
-    cfg.stopped = s.stopped
     cfg.camera_off = set(s.camera_off)
     # 카메라마다 다른 모델을, 여러 개까지 쓸 수 있다. 여기서는 표만 넘기고, 실제로 어느
     # 모델을 열지는 워커가 자기 카메라를 보고 정한다(main.YoloSource.open) — 워커마다
@@ -168,20 +185,24 @@ def apply_settings(cfg: Config, s: "settings.Settings") -> None:
         log.warning("카메라별 모델 지정 중 파일이 없는 것을 건너뜁니다: %s",
                     ", ".join(sorted(dropped)))
 
-    if s.active_model:
-        candidate = Path(cfg.models_dir) / s.active_model
-        if candidate.is_file():
-            cfg.model_path = candidate
-            cfg.dry_run = False
-        else:
-            log.warning("설정이 가리키는 모델이 없습니다: %s", candidate)
+    # 공통 모델들. 한 번도 고르지 않았으면(None) env 의 MODEL_PATH 하나를 쓴다.
+    if s.active_models is None:
+        chosen = [cfg.model_path] if cfg.model_path else []
+    else:
+        chosen = [Path(cfg.models_dir) / n for n in s.active_models]
+    cfg.common_models = [p for p in chosen if p.is_file()]
+    for p in chosen:
+        if not p.is_file():
+            log.warning("공통 모델로 켜 둔 파일이 없습니다: %s", p)
 
-    model = cfg.model_path.name if cfg.model_path else ""
-    if model and s.rows(model):
-        # 화면에서 만든 표가 있으면 그것이 CLASS_MAP env 를 대신한다.
-        cfg.class_map = s.class_map(model)
-        cfg.aliases = s.alias_map(model)
+    # dry-run 은 '모델이 아직 하나도 없는 새 현장' 에서만 내려앉는다. 일부러 다 껐으면
+    # (active_models == []) 아무것도 하지 않아야 한다 — 그때 합성 박스를 내보내면 끈
+    # 화면에 가짜 박스가 뜬다.
+    if cfg.common_models or cfg.camera_models:
+        cfg.dry_run = cfg.force_dry_run
+    else:
+        cfg.dry_run = cfg.force_dry_run or s.active_models is None
 
-    # 올려 둔 모델 전부의 표를 담는다. 카메라별로 다른 모델을 쓸 때 워커가 여기서 찾는다.
+    # 올려 둔 모델 전부의 표를 담는다. 워커가 자기 모델의 표를 여기서 찾는다.
     cfg.model_maps = {name: (s.class_map(name), s.alias_map(name), s.disabled(name))
                       for name in s.models}
