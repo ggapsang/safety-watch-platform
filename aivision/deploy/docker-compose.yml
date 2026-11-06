@@ -293,6 +293,11 @@ services:
       # 모델 파일과 이 모듈의 설정(module.json). 화면에서 모델을 올리고 설정을 고치므로
       # 읽기 전용이 아니다. 호스트 폴더라 파일을 직접 넣고 빼기도 쉽다.
       - ../models:/models
+      # 이미지 판별률 평가(evaluate.py) 데이터와 결과. 세트마다 폴더 하나 —
+      # images/·labels/·classes.txt 를 두면 results/<시각>/ 에 결과가 쌓인다.
+      # 녹화·감시 기록과 같은 이유로 기본값 없이 호스트 폴더를 받는다 — 시험 결과를
+      # 볼륨 안에 두면 정작 제출할 때 탐색기로 꺼낼 수 없다.
+      - ${EVAL_PATH:?.env 의 EVAL_PATH 에 평가 데이터를 둘 호스트 폴더 경로를 넣으세요 (예 C:/aivision-eval)}:/eval
     # GPU 추론을 쓸 때 주석을 푼다. Docker Desktop 은 WSL2 GPU 지원이 켜져 있어야 한다.
     # GPU 를 넘긴다. 호스트에 NVIDIA 드라이버와 컨테이너 툴킷이 있어야 하고, Docker
     # Desktop 은 WSL2 GPU 지원이 켜져 있어야 한다. 셋 중 하나라도 없으면 이 블록 때문에

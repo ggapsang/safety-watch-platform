@@ -156,6 +156,42 @@
   }
   .picks input { margin: 0; cursor: pointer; }
   .picks.disabled { opacity: 0.35; }
+
+  /* 이미지 판별률 평가. 결과 이미지 격자가 넓어야 해서 두 단 밖에 통째로 둔다. */
+  #eval-card { margin-top: 18px; }
+  .eval-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-bottom: 6px; }
+  .eval-bar label { margin: 0; }
+  .eval-bar select { min-width: 260px; }
+  .eval-bar .check { display: inline-flex; align-items: center; gap: 6px; padding-bottom: 8px; font-size: 12.5px; }
+  .eval-bar .check input { width: auto; margin: 0; }
+  .eval-bar .grow { flex: 1; }
+  .eval-upload {
+    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px;
+    margin: 10px 0 4px; padding: 11px 12px; border-radius: 9px; background: var(--surface-soft);
+  }
+  .eval-upload label { margin: 0; }
+  .progress { height: 8px; margin: 10px 0 4px; border-radius: 99px; background: var(--surface-card); overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--primary); transition: width .3s; }
+  /* 시험 절차가 '화면에 출력된 판별률' 을 본다. 한눈에 읽히게 크게 둔다. */
+  .rate { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin: 14px 0 6px; }
+  .rate .big { font-size: 40px; font-weight: 700; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .rate .pill { font-size: 13px; padding: 3px 12px; }
+  .rate .formula { font-size: 13px; color: var(--body-strong); }
+  .eval-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .eval-meta b { color: var(--body-strong); font-weight: 600; }
+  table.per-class { width: auto; margin-bottom: 12px; }
+  table.per-class td, table.per-class th { padding: 5px 14px 5px 0; }
+  .filters { display: flex; gap: 6px; align-items: center; margin: 4px 0 10px; }
+  .filters button.on { border-color: var(--primary); color: var(--primary-active); background: var(--primary-soft); }
+  .shots { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .shot { cursor: pointer; border: 1px solid var(--hairline); border-radius: 9px; overflow: hidden; background: var(--canvas); }
+  .shot:hover { border-color: var(--primary); }
+  .shot img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--surface-card); }
+  .shot .cap { display: flex; align-items: center; gap: 6px; padding: 5px 8px; font-size: 11.5px; }
+  .shot .cap .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--body-strong); }
+  .shot .cap .n { color: var(--muted); white-space: nowrap; }
+  .modal.wide { width: min(1500px, 100%); }
+  .modal.wide img { display: block; max-width: 100%; max-height: 74vh; margin: 0 auto; }
 </style>
 </head>
 <body>
@@ -260,6 +296,51 @@
           <tbody id="class-rows"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- 이미지 판별률 평가(카이스트 테스트베드, 시험 항목 5).
+       스크립트(python evaluate.py /eval/<세트>)와 같은 코어를 부른다 — 숫자가 같다. -->
+  <div class="card" id="eval-card">
+    <h2>이미지 판별률 평가</h2>
+    <p class="desc">
+      정답을 붙인 이미지 묶음(세트)을 지금 <b>켜 둔 공통 모델</b>과 <b>같은 민감도</b>로 판독해,
+      정답과 비교합니다. 실시간 화면과 똑같이 판독하므로 여기서 나온 숫자가 관제 화면의 실력입니다.<br />
+      <b>일치</b> — 한 이미지의 정답 객체(AMR·Human)가 모두 같은 클래스로 IoU 0.5 이상 잡히고, 헛탐지가
+      없어야 합니다. 판별률 = 일치 / 데이터 × 100, 기준 95 % 이상.<br />
+      세트 폴더: <code>images/</code>(jpg·png) + <code>labels/</code>(같은 이름의 YOLO txt) +
+      <code>classes.txt</code>. 정답이 하나도 없으면 판독만 합니다.
+    </p>
+    <div class="eval-bar">
+      <label><span>세트</span><select id="eval-set"></select></label>
+      <label class="check"><input type="checkbox" id="eval-predict-only" /> 정답과 비교하지 않고 판독만</label>
+      <button class="primary" id="eval-run">평가 실행</button>
+      <div class="grow"></div>
+      <label><span>지난 결과</span><select id="eval-runs"></select></label>
+      <button id="eval-upload-toggle">세트 올리기</button>
+    </div>
+    <div class="eval-upload" id="eval-upload" hidden>
+      <label><span>폴더</span><input type="file" id="eval-folder" webkitdirectory multiple /></label>
+      <label><span>세트 이름</span><input id="eval-name" placeholder="kaist-100" /></label>
+      <button class="primary" id="eval-upload-btn">올리기</button>
+      <span class="muted" style="font-size:12px">영문·숫자·. _ - 로. 같은 이름이 있으면 받지 않습니다.</span>
+    </div>
+    <div class="msg" id="eval-msg"></div>
+    <div class="progress" id="eval-progress" hidden><div></div></div>
+    <div id="eval-result"></div>
+  </div>
+
+  <!-- 결과 이미지 크게 보기 -->
+  <div class="modal-bg" id="shot-modal" hidden>
+    <div class="modal wide">
+      <div class="modal-head">
+        <h2 id="shot-title"></h2>
+        <button id="shot-prev" aria-label="이전">‹</button>
+        <button id="shot-next" aria-label="다음">›</button>
+        <button id="shot-close" aria-label="닫기">✕</button>
+      </div>
+      <div class="modal-body"><img id="shot-img" alt="" /></div>
+      <div class="modal-foot"><span class="muted" id="shot-detail"></span></div>
     </div>
   </div>
 
