@@ -21,7 +21,7 @@
  *   화면에 여러 개를 동시에 띄우면 다른 API 호출이 막힌다. active=false 면 <img> 를 아예
  *   내려 연결을 끊는다.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import { LABEL_FILL, boxColor } from "../lib/boxcolor";
@@ -57,7 +57,6 @@ export function LiveVideo({
   const { data: settings } = useSettings();
   const colors = settings?.box_colors ?? {};
 
-  const imgRef = useRef<HTMLImageElement | null>(null);
   const [failed, setFailed] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -83,17 +82,24 @@ export function LiveVideo({
     setFailed(false);
   }, [camera.id]);
 
-  // 이 화면을 떠날 때 MJPEG 연결을 손으로 끊는다.
+  // <img> 가 화면에서 내려갈 때 MJPEG 연결을 손으로 끊는다.
   //
   // <img> 를 DOM 에서 떼는 것만으로는 multipart 연결이 끊긴다는 보장이 없다. src 를
   // 비우면 브라우저가 진행 중인 요청을 확실히 중단한다. 서버는 이 연결을 세어 원본
   // 디코딩을 붙잡으므로, 안 끊으면 아무도 안 보는 카메라가 계속 원본을 문다.
-  useEffect(() => {
-    const img = imgRef.current;
+  //
+  // **effect 가 아니라 ref 정리 함수에서 한다.** 예전에는 nonce 가 바뀔 때만 끊었는데,
+  // <img> 가 내려가는 길은 그 밖에도 있다 — 카메라가 오프라인이 되거나(showStream=false)
+  // 영상이 실패하거나(failed) 화면을 떠날 때. 그 길로 내려간 <img> 는 연결을 문 채
+  // 남았다. 카메라가 순간 끊길 때마다 하나씩 쌓여 사흘 만에 일곱 개가 됐고, 브라우저의
+  // 호스트당 동시 연결 한도(6)를 다 채워 화면 전체가 멎었다. ref 정리는 어느 길로
+  // 내려가든 반드시 불린다.
+  const imgRef = useCallback((img: HTMLImageElement | null) => {
+    if (!img) return;
     return () => {
-      if (img) img.src = "";
+      img.src = "";
     };
-  }, [nonce]);
+  }, []);
 
   const offline = camera.status !== "normal";
   const showStream = active && !offline && !failed;
@@ -123,8 +129,8 @@ export function LiveVideo({
             // 같은 요소를 두고 src 만 바꾸면 브라우저가 앞의 요청을 **중단한다.**
             // 자원 회수를 브라우저의 선의에 기대지 않는 유일한 방법이다.
             // 지난 장면이 남는 문제는 아래 opacity 로 가린다(요소를 버릴 일이 아니다).
+            // nonce 도 열쇠에 넣지 않는다(같은 이유). 다시 연결할 때는 src 의 ?t= 만 바꾼다.
             ref={imgRef}
-            key={nonce}
             src={`${api.streamUrl(camera.id)}?t=${nonce}`}
             alt={`${camera.name} 라이브 영상`}
             onLoad={(e) => {
