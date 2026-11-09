@@ -204,9 +204,20 @@ def _scale_back(box, ratio: float, pad, width: int, height: int):
 
 # ────────────────────────────────────────────────────────────── 백엔드
 
+def _fixed_square(shape) -> int | None:
+    """입력 모양 [1, 3, H, W] 에서 박혀 있는 정사각 크기. 가변(dynamic)이면 None."""
+    try:
+        h, w = shape[2], shape[3]
+    except (IndexError, TypeError):
+        return None
+    return h if isinstance(h, int) and h == w and h > 0 else None
+
+
 class _Backend:
     input_dtype: np.dtype = np.dtype(np.float32)
     device: str = "cpu"
+    # 모델 파일에 박힌 입력 크기. 가변 입력 모델이면 None — 그때만 설정값(IMGSZ)을 쓴다.
+    input_size: int | None = None
 
     def infer(self, blob: np.ndarray) -> np.ndarray:
         raise NotImplementedError
@@ -238,6 +249,7 @@ class OnnxBackend(_Backend):
         self.output_name = self.session.get_outputs()[0].name
         self.device = ("cuda" if "CUDAExecutionProvider" in self.session.get_providers()
                        else "cpu")
+        self.input_size = _fixed_square(inp.shape)
         log.info("ONNX 백엔드: device=%s input=%s%s output=%s",
                  self.device, inp.name, inp.shape, self.output_name)
 
@@ -289,13 +301,20 @@ class Model:
                  class_map: dict[str, str] | None = None,
                  layout: str = "auto") -> None:
         self.layout = layout
-        self.imgsz = imgsz
         self.conf_thres = conf_thres
         self.iou_thres = iou_thres
         self.class_map = class_map or {}
         self.names: list[str] = []
         self.backend = _load_backend(path, device)
         self.device = self.backend.device
+        # **모델마다 자기 입력 크기로 판독한다.** 크기는 모델 파일이 정한다 — ONNX 는 내보낼
+        # 때 입력 모양이 박히고, 거기에 다른 크기를 넣으면 세션이 거절한다. 예전에는 설정값
+        # 하나(IMGSZ=640)를 모든 모델에 썼는데, 먼 사람을 잡으려고 사람 모델만 1280 으로
+        # 내보내자 둘이 함께 돌 수 없게 됐다. 설정값은 가변 입력 모델에만 쓴다.
+        self.imgsz = self.backend.input_size or imgsz
+        if self.backend.input_size and self.backend.input_size != imgsz:
+            log.info("%s 는 입력 %d 로 판독합니다 (모델에 박힌 크기, 설정값 %d 대신)",
+                     path.name, self.imgsz, imgsz)
 
     def class_name(self, index: int) -> str:
         if 0 <= index < len(self.names):

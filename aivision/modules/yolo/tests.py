@@ -118,6 +118,14 @@ def test_scale_back() -> None:
     out = inference._scale_back([-500, -500, 99999, 99999], ratio, pad, 1920, 1080)
     check(out == (0.0, 0.0, 1.0, 1.0), "프레임을 벗어난 박스는 0~1 로 잘린다")
 
+    # 모델마다 자기 입력 크기 — 모델 파일에 박힌 모양에서 읽는다
+    check(inference._fixed_square([1, 3, 1280, 1280]) == 1280, "입력 [1,3,1280,1280] → 1280")
+    check(inference._fixed_square([1, 3, 640, 640]) == 640, "입력 [1,3,640,640] → 640")
+    check(inference._fixed_square([1, 3, "height", "width"]) is None, "가변 입력이면 설정값을 쓴다")
+    check(inference._fixed_square([1, 3, 640, 480]) is None, "정사각이 아니면 설정값을 쓴다")
+    img, ratio, pad = inference.letterbox(np.zeros((1440, 2560, 3), dtype=np.uint8), 1280)
+    check(img.shape[:2] == (1280, 1280) and abs(ratio - 0.5) < 1e-9, "QHD → 1280 은 절반으로 줄인다")
+
 
 # ────────────────────────────────────────────────── 3. 전이 검출
 

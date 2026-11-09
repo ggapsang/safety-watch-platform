@@ -489,6 +489,8 @@ def evaluate(set_dir: Path, cfg, *, out_dir: Path | None = None,
             if progress:
                 progress(n, len(samples), s.image.name, verdict.ok if verdict else None)
         device = detector.device
+        # 모델마다 판독한 입력 크기(모델에 박힌 것). close() 가 엔진을 비우기 전에 읽는다.
+        sizes = {p.name: m.imgsz for p, (m, _, _) in zip(detector.paths, detector.engines)}
     finally:
         detector.close()
 
@@ -506,6 +508,8 @@ def evaluate(set_dir: Path, cfg, *, out_dir: Path | None = None,
         "per_class": per_class if evaluating else None,
         "ignored_detections": detector.ignored,
         "models": [p.name for p in detector.paths],
+        # 같은 모델이라도 입력 크기가 다르면 결과가 다르다 — 재현 근거로 남긴다.
+        "imgsz": sizes,
         "device": device,
         "thresholds": {"conf": cfg.conf_thres, "nms_iou": cfg.iou_thres,
                        "match_iou": match_iou, "min_box_px": cfg.min_box_px},
@@ -572,7 +576,8 @@ def main(argv: list[str]) -> int:
         return 2
 
     print()
-    print(f"모델   {', '.join(summary['models'])} ({summary['device']})")
+    print(f"모델   {', '.join(f'{n} (입력 {s})' for n, s in summary['imgsz'].items())} "
+          f"({summary['device']})")
     print(f"임계값 conf {summary['thresholds']['conf']} · 일치 IoU {summary['thresholds']['match_iou']}")
     if summary["class_names_assumed"]:
         print("주의   classes.txt 가 없어 정답 클래스를 0=AMR, 1=Human 으로 가정했습니다")

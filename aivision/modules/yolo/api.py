@@ -123,6 +123,21 @@ def create_app(cfg, runner_status: Callable[[], dict],
             raise HTTPException(status_code=404, detail=f"모델을 찾을 수 없습니다: {name}")
         return path
 
+    # 모델 파일의 입력 크기. 화면이 3초마다 부르므로 파일이 바뀌었을 때만 다시 연다.
+    input_sizes: dict[str, tuple[float, int | None]] = {}
+
+    def _input_size(p: Path) -> int | None:
+        mtime = p.stat().st_mtime
+        hit = input_sizes.get(p.name)
+        if hit and hit[0] == mtime:
+            return hit[1]
+        try:
+            size = inference.OnnxBackend(p, "cpu").input_size
+        except Exception:                                             # noqa: BLE001
+            size = None
+        input_sizes[p.name] = (mtime, size)
+        return size
+
     def _common_names() -> list[str]:
         """지금 실제로 공통 모델로 도는 것들(파일이 있는 것만)."""
         return [p.name for p in cfg.common_models]
@@ -135,6 +150,8 @@ def create_app(cfg, runner_status: Callable[[], dict],
             out.append({
                 "name": p.name,
                 "size_mb": round(p.stat().st_size / 1024 / 1024, 1),
+                # 이 모델이 판독하는 입력 크기(모델에 박힌 것). 가변이면 설정값을 쓴다.
+                "imgsz": _input_size(p) or cfg.imgsz,
                 # 공통 모델로 켜져 있나. 여럿이 동시에 켜질 수 있다.
                 "active": p.name in active,
                 "note": s.notes.get(p.name, ""),

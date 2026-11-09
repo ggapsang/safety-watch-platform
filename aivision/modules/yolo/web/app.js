@@ -85,7 +85,9 @@ function renderInference() {
     ["모드", { idle: "켜 둔 모델 없음", "dry-run": "dry-run" }[m.mode] || "추론"],
     ["공통 모델", (m.models || []).join(" + ") || "-"],
     ["장치", inf.device || "-"],
-    ["입력 크기", m.imgsz],
+    // 모델마다 자기 입력 크기로 판독한다(AMR 640, 사람 1280 처럼). 설정값 하나로 보이면 틀린다.
+    ["입력 크기", (state.models || []).filter((x) => x.active)
+      .map((x) => `${x.name.replace(/\.onnx$/, "")} ${x.imgsz}`).join(" · ") || m.imgsz],
     ["누적 프레임", (inf.frames ?? 0).toLocaleString()],
     ["발행", (inf.published ?? 0).toLocaleString()],
   ].map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
@@ -204,7 +206,7 @@ function renderModels() {
           <b>${esc(m.name)}</b>${badge}
           ${m.note ? `<div class="muted">${esc(m.note)}</div>` : ""}
         </td>
-        <td class="num">${m.size_mb}MB</td>
+        <td class="num">${m.size_mb}MB<div class="muted">입력 ${m.imgsz}</div></td>
         <td class="num">${m.classes.length || "-"}</td>
         <td style="white-space:nowrap">
           ${m.active
@@ -749,7 +751,8 @@ function renderEvalResult() {
 
   const meta = [
     ["세트", `${s.set} / ${s.run}`],
-    ["모델", `${s.models.join(" + ")} (${s.device})`],
+    ["모델", `${s.models.map((n) => (s.imgsz && s.imgsz[n] ? `${n} 입력 ${s.imgsz[n]}` : n))
+      .join(" + ")} (${s.device})`],
     ["최소 점수", s.thresholds.conf],
     ["일치 IoU", s.thresholds.match_iou],
     ["소요", `${s.seconds}초`],
