@@ -1,6 +1,6 @@
 """데이터셋·라벨링 — 이미지를 보고 박스를 쳐서 YOLO 라벨로 쌓는다.
 
-화면은 web/label.html. 여기는 그 뒤의 API 다.
+화면은 web/index.html 의 '데이터셋·라벨링' 탭(label.js). 여기는 그 뒤의 API 다.
 
 데이터 자리는 `/datasets`(호스트의 DATASET_PATH)다. 데이터셋 하나가 폴더 하나 —
   /datasets/<이름>/images/*.jpg      이미지
@@ -232,27 +232,31 @@ class _Drafter:
     모델·임계값이 바뀌면(플러그인에서 공통 모델을 바꾸면) 다음 요청에서 새로 연다.
     """
 
-    def __init__(self, cfg) -> None:
-        self.cfg = cfg
+    def __init__(self, load_cfg) -> None:
+        self.load_cfg = load_cfg        # 객체감지 설정을 그때그때 새로 읽는다
         self.lock = threading.Lock()
         self.det = None
         self.key = None
         self.used = 0.0
         threading.Thread(target=self._reaper, name="drafter-reaper", daemon=True).start()
 
-    def _key(self, class_map):
-        c = self.cfg
+    @staticmethod
+    def _key(c, class_map):
+        tables = sorted((name, sorted(m.items()), sorted(a.items()), sorted(d))
+                        for name, (m, a, d) in c.model_maps.items())
         return (tuple(str(p) for p in c.common_models), c.conf_thres, c.iou_thres,
-                c.min_box_px, tuple(sorted(class_map.items())))
+                c.min_box_px, c.device, c.imgsz, c.layout, str(tables),
+                tuple(sorted(class_map.items())))
 
     def detect(self, frame, class_map: dict[str, str]):
+        cfg = self.load_cfg()
         with self.lock:
-            key = self._key(class_map)
+            key = self._key(cfg, class_map)
             if self.det is None or self.key != key:
                 if self.det is not None:
                     self.det.close()
                 self.det = None
-                self.det = evaluate.Detector(self.cfg, class_map=class_map)
+                self.det = evaluate.Detector(cfg, class_map=class_map)
                 self.key = key
                 log.info("자동 라벨 판독기 열림: %s", ", ".join(p.name for p in self.det.paths))
             self.used = time.monotonic()
@@ -291,8 +295,10 @@ def class_map_for(classes: list[str]) -> tuple[dict[str, str], dict[str, int]]:
 
 # ────────────────────────────────────────────────────────────── API
 
-def mount(app: FastAPI, cfg) -> None:
-    drafter = _Drafter(cfg)
+def mount(app: FastAPI, cfg, load_cfg) -> None:
+    """`cfg` 는 이 플러그인 설정(플랫폼 주소), `load_cfg` 는 객체감지 설정을 새로 읽는 함수다
+    — 초안은 객체감지 화면에서 지금 켜 둔 모델·민감도로 만든다."""
+    drafter = _Drafter(load_cfg)
     bulk: dict = {}                       # 일괄 자동 라벨 진행(한 번에 하나)
     bulk_lock = threading.Lock()
     # 라벨 파일 경로 → 박스 수. 목록을 열 때마다 수천 개를 다시 읽지 않게. 이 화면이 쓰는

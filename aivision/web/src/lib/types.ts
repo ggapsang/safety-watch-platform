@@ -279,6 +279,9 @@ export interface AnalyticsModule {
   enabled: boolean;
   alive: boolean;
   last_seen_at: string | null;
+  /** 마지막 heartbeat 본문 그대로. 코어가 읽는 것은 `uses_cameras` 하나뿐이다 —
+   *  false 면 영상을 보지 않는 플러그인이라 담당 카메라 칸을 그리지 않는다. */
+  last_status?: { uses_cameras?: boolean } & Record<string, unknown>;
   assignments: { id: number; camera_id: number; enabled: boolean }[];
 }
 

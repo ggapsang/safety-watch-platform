@@ -44,6 +44,18 @@ class Detection:
                 "label": self.label, "score": round(self.score, 3)}
 
 
+def short_side_px(det, width: int, height: int) -> float:
+    """박스의 기하평균 크기(픽셀). 사내 기준이 sqrt(w*h) 였다.
+
+    작은 박스 거르기(MIN_BOX_PX)에 쓴다. 실시간 워커(main)와 판별률 평가(학습·평가
+    플러그인의 evaluate)가 같은 함수를 써야 같은 박스를 버린다 — 그래서 둘이 함께 담는
+    이 파일에 둔다.
+    """
+    bw = max(0.0, det.x2 - det.x1) * width
+    bh = max(0.0, det.y2 - det.y1) * height
+    return (bw * bh) ** 0.5
+
+
 # ────────────────────────────────────────────────────────────── 전처리
 
 def letterbox(img: np.ndarray, new_size: int = 640,

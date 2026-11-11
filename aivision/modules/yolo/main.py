@@ -35,6 +35,7 @@ from typing import Iterator
 sys.path.insert(0, "/app")                     # _sdk 가 옆에 놓인다
 
 import config as config_module                 # noqa: E402
+from inference import short_side_px            # noqa: E402
 from _sdk import (Debouncer, Runner, Source, WorkItem, configure_logging,  # noqa: E402
                   main_loop)
 
@@ -269,7 +270,7 @@ class YoloSource(_Base):
                     # 80종을 잡는 공개 모델(COCO)에서 사람만 쓰는 경우가 그렇다.
                     if disabled and det.label in disabled:
                         continue
-                    if min_px and _short_side_px(det, w, h) < min_px:
+                    if min_px and short_side_px(det, w, h) < min_px:
                         # 작은 이물질(볼트·나사류)을 무시하고 싶을 때 쓴다. 학습 라벨에서
                         # 빼는 것보다 여기서 거르는 편이 낫다 — 사내 실험에서 라벨을 지우면
                         # 감독이 모순되어 큰 목표의 성능까지 떨어졌다(mAP 0.851 -> 0.737).
@@ -286,13 +287,6 @@ class YoloSource(_Base):
                         found.setdefault(code, []).append(dict(box))
             self.last_found = found
             yield live
-
-
-def _short_side_px(det, width: int, height: int) -> float:
-    """박스의 기하평균 크기(픽셀). 사내 기준이 sqrt(w*h) 였다."""
-    bw = max(0.0, det.x2 - det.x1) * width
-    bh = max(0.0, det.y2 - det.y1) * height
-    return (bw * bh) ** 0.5
 
 
 # ────────────────────────────────────────────────────────────── 이벤트로 올리기

@@ -57,6 +57,7 @@ docker compose up -d --build
 | **RTSP (분석 모듈)** | `rtsp://<서버IP>:8554/cam/{id}` | 모듈이 영상을 가져가는 곳 |
 | 객체감지 모듈 화면 | `<서버IP>:11990` | 모델 업로드·탐지 대상·민감도. 플랫폼 탭에서도 열립니다 |
 | 충돌 위험 모듈 화면 | `<서버IP>:12010` | 위험 구역·임계값. 플랫폼 탭에서도 열립니다 |
+| 학습·평가 모듈 화면 | `<서버IP>:12020` | 데이터셋·라벨링, 이미지 판별률 평가. 플랫폼 탭에서도 열립니다 |
 | 미디어 WebRTC / HLS | `<서버IP>:11884` / `:11885` | 브라우저 저지연 재생(현재 미사용) |
 
 > 8080·5432 는 다른 프로그램과 자주 부딪혀 118xx 대역으로 옮겼습니다.
@@ -90,6 +91,7 @@ docker compose up -d --build
 | `mod-camera-meta` | 카메라 메타데이터 모듈 | 카메라가 이미 만든 박스를 읽어 화면에 그립니다 |
 | `mod-yolo` | 객체감지 모듈 | 올린 ONNX 모델로 추론합니다. 자기 화면을 11990 에 띄웁니다 |
 | `mod-collision` | 충돌 위험 모듈 | **영상을 열지 않습니다.** 다른 플러그인이 낸 박스를 받아 기하만 따집니다. 자기 화면을 12010 에 띄웁니다 |
+| `mod-trainer` | 학습·평가 모듈 | **영상을 열지 않습니다.** 데이터셋에 박스를 쳐 라벨을 만들고, 객체감지와 같은 판독으로 이미지 판별률을 잽니다. 자기 화면을 12020 에 띄웁니다 |
 
 ```bash
 docker compose up -d --build          # base-* 와 mod-* 전부
@@ -749,14 +751,17 @@ aivision/
 │  ├─ _sdk/               공용 배관 — 등록·일감 폴링·발행·구독·워커 수명주기·전이 판정
 │  │                      모듈이 구현할 것은 Source 하나뿐입니다
 │  ├─ onvif_meta/         카메라 메타데이터 -> 라이브 박스 (모델 불필요)
-│  └─ yolo/               객체감지(YOLO) — 추론·자기 화면(11990)
-│     ├─ inference.py       추론 (전처리 -> 백엔드 -> 후처리)
-│     ├─ api.py · web/      모듈이 직접 띄우는 화면과 API
-│     └─ settings.py       화면에서 고친 설정 (/models/module.json)
+│  ├─ yolo/               객체감지(YOLO) — 추론·자기 화면(11990)
+│  │  ├─ inference.py       추론 (전처리 -> 백엔드 -> 후처리)
+│  │  ├─ api.py · web/      모듈이 직접 띄우는 화면과 API
+│  │  └─ settings.py       화면에서 고친 설정 (/models/module.json)
+│  └─ trainer/            학습·평가 — 데이터셋·라벨링, 이미지 판별률 평가, 자기 화면(12020)
+│     ├─ dataset_api.py     라벨링 API (데이터는 DATASET_PATH)
+│     └─ evaluate.py · eval_api.py  판별률 평가 (yolo/inference.py 를 그대로 담아 같은 판독)
 │
 ├─ docs/              === 계약 ===
 │  └─ 플러그인-만들기.md  플러그인 계약. 만드는 쪽이 읽을 문서이며 _sdk 보다 이쪽이 기준입니다
-├─ models/            모델 파일을 넣는 곳 (mod-yolo 에 /models 로 마운트)
+├─ models/            모델 파일을 넣는 곳 (mod-yolo 에 /models 로 마운트, mod-trainer 는 읽기 전용)
 └─ web/               React + Vite + Tailwind v4 (빌드 결과가 base-app 이미지로 들어갑니다)
    ├─ src/pages/          종합 현황 · 카메라 · 이벤트 · 통계 · MQTT 로그 · 설정 파일 · 관리자
    ├─ src/components/     LiveVideo(박스 오버레이) · CameraStrip · Shell(사이드바)

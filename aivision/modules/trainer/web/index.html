@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>객체감지 — 데이터셋·라벨링</title>
+<title>학습·평가</title>
 <!--
-  이미지를 보고 박스를 쳐서 YOLO 라벨로 쌓는 화면. 서버는 dataset_api.py.
-  index.html 과 같은 이유로 빌드 도구 없이 정적 파일 두 개(label.html, label.js)로 끝낸다.
-  색과 글꼴은 index.html(= 플랫폼 토큰)과 같다.
+  학습·평가 플러그인 화면. 탭 둘 —
+    데이터셋·라벨링   이미지를 보고 박스를 쳐서 YOLO 라벨로 쌓는다 (label.js → dataset_api.py)
+    이미지 판별률 평가 세트를 객체감지와 같은 판독으로 재고 정답과 비교한다 (eval.js → eval_api.py)
+  다른 플러그인 화면과 같은 이유로 빌드 도구 없이 정적 파일로 끝낸다. 색과 글꼴은 플랫폼 토큰과 같다.
 -->
 <style>
   :root {
@@ -155,12 +156,95 @@
   .keys span:nth-child(odd) { white-space: nowrap; }
   .progress { height: 6px; border-radius: 99px; background: var(--surface-card); overflow: hidden; min-width: 120px; flex: 1; }
   .progress > div { height: 100%; width: 0; background: var(--primary); transition: width .3s; }
+  /* ── 탭 ── */
+  #tabs {
+    display: flex; align-items: center; gap: 4px; padding: 0 14px;
+    background: #fff; border-bottom: 1px solid var(--hairline);
+  }
+  #tabs h1 { margin: 0 16px 0 0; font-size: 15px; color: var(--ink); white-space: nowrap; }
+  #tabs button {
+    border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+    padding: 11px 12px 9px; font-size: 13px; color: var(--muted);
+  }
+  #tabs button:hover { color: var(--primary-active); }
+  #tabs button.on { color: var(--ink); border-bottom-color: var(--primary); }
+  .pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #tab-eval { overflow-y: auto; padding: 18px 22px 40px; display: block; }
+
+  /* ── 이미지 판별률 평가 ── 결과 이미지 격자가 넓어야 해서 화면 폭을 다 쓴다. */
+  #tab-eval .card { background: #fff; border: 1px solid var(--hairline); border-radius: 12px; padding: 16px 17px; }
+  #tab-eval h2 { margin: 0 0 3px; font-size: 14.5px; color: var(--body-strong); }
+  #tab-eval .desc { margin: 0 0 13px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  #tab-eval label > span { display: block; margin-bottom: 4px; font-size: 12.5px; font-weight: 600; color: var(--body-strong); }
+  #tab-eval table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  #tab-eval th, #tab-eval td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--hairline); }
+  #tab-eval th { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+  #tab-eval td.num { font-variant-numeric: tabular-nums; }
+  #tab-eval .muted { color: var(--muted); }
+  #tab-eval code { font: 12px ui-monospace, Consolas, monospace; color: var(--body-strong); }
+  #tab-eval .msg { margin-top: 9px; }
+  #tab-eval .warn {
+    margin: 0 0 14px; padding: 10px 12px; border-radius: 9px;
+    background: #fdf6e3; border: 1px solid #f0dfae; color: #8a6708; font-size: 12.5px;
+  }
+  #tab-eval .pill.on { background: #dff0e2; color: #2f7a44; }
+  #tab-eval .pill.stop { background: #fdecec; color: var(--error); }
+  .eval-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-bottom: 6px; }
+  .eval-bar label { margin: 0; }
+  .eval-bar select { min-width: 260px; }
+  .eval-bar .check { display: inline-flex; align-items: center; gap: 6px; padding-bottom: 7px; font-size: 12.5px; }
+  .eval-bar .check input { width: auto; margin: 0; }
+  .eval-bar .grow { flex: 1; }
+  .eval-upload {
+    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px;
+    margin: 10px 0 4px; padding: 11px 12px; border-radius: 9px; background: var(--surface-soft);
+  }
+  .eval-upload label { margin: 0; }
+  #eval-progress { height: 8px; margin: 10px 0 4px; }
+  /* 시험 절차가 '화면에 출력된 판별률' 을 본다. 한눈에 읽히게 크게 둔다. */
+  .rate { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin: 14px 0 6px; }
+  .rate .big { font-size: 40px; font-weight: 700; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .rate .pill { font-size: 13px; padding: 3px 12px; }
+  .rate .formula { font-size: 13px; color: var(--body-strong); }
+  .eval-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .eval-meta b { color: var(--body-strong); font-weight: 600; }
+  #tab-eval table.per-class { width: auto; margin-bottom: 12px; }
+  #tab-eval table.per-class td, #tab-eval table.per-class th { padding: 5px 14px 5px 0; }
+  #tab-eval .filters { display: flex; gap: 6px; align-items: center; margin: 4px 0 10px; padding: 0; border: 0; }
+  #tab-eval .filters button.on { border-color: var(--primary); color: var(--primary-active); background: var(--primary-soft); }
+  .shots { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .shot { cursor: pointer; border: 1px solid var(--hairline); border-radius: 9px; overflow: hidden; background: var(--canvas); }
+  .shot:hover { border-color: var(--primary); }
+  .shot img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--surface-card); }
+  .shot .cap { display: flex; align-items: center; gap: 6px; padding: 5px 8px; font-size: 11.5px; }
+  .shot .cap .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--body-strong); }
+  .shot .cap .n { color: var(--muted); white-space: nowrap; }
+  /* 결과 이미지 크게 보기 */
+  .modal-bg {
+    position: fixed; inset: 0; z-index: 50; display: flex;
+    align-items: center; justify-content: center; padding: 24px; background: rgba(24, 23, 21, .45);
+  }
+  .modal {
+    display: flex; flex-direction: column; width: min(1500px, 100%); max-height: 92vh;
+    background: #fff; border-radius: 14px; padding: 16px 18px 14px; box-shadow: 0 18px 48px rgba(24, 23, 21, .22);
+  }
+  .modal-head { display: flex; align-items: center; gap: 10px; }
+  .modal-head h2 { flex: 1; margin: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal-head button { padding: 4px 9px; line-height: 1; }
+  .modal-body { min-height: 0; overflow: auto; margin-top: 10px; }
+  .modal-body img { display: block; max-width: 100%; max-height: 76vh; margin: 0 auto; }
+  .modal-foot { margin-top: 10px; font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
+  <nav id="tabs">
+    <h1>학습·평가</h1>
+    <button data-tab="label" class="on">데이터셋·라벨링</button>
+    <button data-tab="eval">이미지 판별률 평가</button>
+  </nav>
+
+  <div id="tab-label" class="pane">
   <header>
-    <a class="btn" href="/" title="모델·탐지 설정 화면으로">← 모델·설정</a>
-    <h1>데이터셋·라벨링</h1>
     <select id="ds-select" title="데이터셋"></select>
     <button id="new-toggle">＋ 새 데이터셋</button>
     <span class="sep"></span>
@@ -208,7 +292,7 @@
     <b>평가 세트로</b>
     <input id="eval-name" placeholder="세트 이름 (예 kaist-100)" />
     <button class="primary" id="to-eval">'사용' 으로 평가 세트 만들기</button>
-    <span class="note">'사용' 으로 표시한 이미지와 라벨을 평가 폴더로 복사합니다. 모델·설정 화면의 '이미지 판별률 평가' 에서 바로 고를 수 있습니다.</span>
+    <span class="note">'사용' 으로 표시한 이미지와 라벨을 평가 폴더로 복사합니다. 위쪽 '이미지 판별률 평가' 탭에서 바로 고를 수 있습니다.</span>
   </div>
 
   <main>
@@ -305,7 +389,75 @@
       </div>
     </aside>
   </main>
+  </div>
+
+  <!-- ── 이미지 판별률 평가(카이스트 테스트베드, 시험 항목 5) ──
+       스크립트(python evaluate.py /eval/<세트>)와 같은 코어를 부른다 — 숫자가 같다. -->
+  <div id="tab-eval" class="pane" hidden>
+  <div class="card">
+    <h2>이미지 판별률 평가</h2>
+    <p class="desc">
+      정답을 붙인 이미지 묶음(세트)을 객체감지 플러그인에 지금 <b>켜 둔 공통 모델</b>과 <b>같은 민감도</b>로
+      판독해, 정답과 비교합니다. 실시간 화면과 똑같이 판독하므로 여기서 나온 숫자가 관제 화면의 실력입니다.<br />
+      <b>일치</b> — 한 이미지의 정답 객체(AMR·Human)가 모두 같은 클래스로 IoU 0.5 이상 잡히고, 헛탐지가
+      없어야 합니다. 판별률 = 일치 / 데이터 × 100, 기준 95 % 이상.<br />
+      세트는 <b>데이터셋·라벨링</b> 탭에서 '사용' 으로 고른 이미지로 만들거나, 폴더째 올립니다
+      (<code>images/</code> + <code>labels/</code>(같은 이름의 YOLO txt) + <code>classes.txt</code>).
+      정답이 하나도 없으면 판독만 합니다.
+    </p>
+    <div class="eval-bar">
+      <label><span>세트</span><select id="eval-set"></select></label>
+      <label class="check"><input type="checkbox" id="eval-predict-only" /> 정답과 비교하지 않고 판독만</label>
+      <button class="primary" id="eval-run">평가 실행</button>
+      <div class="grow"></div>
+      <label><span>지난 결과</span><select id="eval-runs"></select></label>
+      <button id="eval-upload-toggle">세트 폴더 올리기</button>
+    </div>
+    <div class="eval-upload" id="eval-upload" hidden>
+      <label><span>폴더</span><input type="file" id="eval-folder" webkitdirectory multiple /></label>
+      <label><span>세트 이름</span><input id="eval-name" placeholder="kaist-100" /></label>
+      <button class="primary" id="eval-upload-btn">올리기</button>
+      <span class="muted" style="font-size:12px">영문·숫자·. _ - 로. 같은 이름이 있으면 받지 않습니다.</span>
+    </div>
+    <div class="msg" id="eval-msg"></div>
+    <div class="progress" id="eval-progress" hidden><div></div></div>
+    <div id="eval-result"></div>
+  </div>
+  </div>
+
+  <!-- 결과 이미지 크게 보기 -->
+  <div class="modal-bg" id="shot-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="shot-title"></h2>
+        <button id="shot-prev" aria-label="이전">‹</button>
+        <button id="shot-next" aria-label="다음">›</button>
+        <button id="shot-close" aria-label="닫기">✕</button>
+      </div>
+      <div class="modal-body"><img id="shot-img" alt="" /></div>
+      <div class="modal-foot"><span class="muted" id="shot-detail"></span></div>
+    </div>
+  </div>
+
+  <script>
+    /* 탭 전환. 라벨링 화면은 숨겨도 그대로 두어(편집 중인 박스·위치) 돌아오면 이어진다. */
+    (() => {
+      const tabs = document.querySelectorAll("#tabs [data-tab]");
+      const show = (name) => {
+        for (const t of tabs) t.classList.toggle("on", t.dataset.tab === name);
+        document.getElementById("tab-label").hidden = name !== "label";
+        document.getElementById("tab-eval").hidden = name !== "eval";
+        try { localStorage.setItem("trainer.tab", name); } catch { /* 없어도 된다 */ }
+        if (name === "eval" && window.evalTabShown) window.evalTabShown();
+      };
+      for (const t of tabs) t.addEventListener("click", () => show(t.dataset.tab));
+      let saved = "label";
+      try { saved = localStorage.getItem("trainer.tab") || "label"; } catch { /* 기본 */ }
+      window.addEventListener("load", () => show(saved === "eval" ? "eval" : "label"));
+    })();
+  </script>
 
   <script src="/label.js"></script>
+  <script src="/eval.js"></script>
 </body>
 </html>

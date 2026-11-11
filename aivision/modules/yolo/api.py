@@ -452,16 +452,6 @@ def create_app(cfg, runner_status: Callable[[], dict],
         log.info("조정값 변경: %s", s.tuning)
         return JSONResponse({name: getattr(cfg, name) for name in settings_module.TUNING})
 
-    # ── 이미지 판별률 평가 ──────────────────────────────────────────
-    # 시험용 기능이라 파일을 따로 둔다(eval_api.py). 판독 코어는 evaluate.py 하나다.
-    import eval_api
-    eval_api.mount(app, cfg)
-
-    # ── 데이터셋·라벨링 ─────────────────────────────────────────────
-    # 이미지를 보고 박스를 쳐서 YOLO 라벨로 쌓는다(dataset_api.py, 화면은 label.html).
-    import dataset_api
-    dataset_api.mount(app, cfg)
-
     # ── 화면 ────────────────────────────────────────────────────────
 
     @app.get("/")
@@ -471,14 +461,5 @@ def create_app(cfg, runner_status: Callable[[], dict],
     @app.get("/app.js")
     async def script() -> FileResponse:
         return FileResponse(str(WEB / "app.js"), media_type="application/javascript")
-
-    @app.get("/label")
-    async def label_page() -> FileResponse:
-        return FileResponse(str(WEB / "label.html"), headers={"Cache-Control": "no-cache"})
-
-    @app.get("/label.js")
-    async def label_script() -> FileResponse:
-        return FileResponse(str(WEB / "label.js"), media_type="application/javascript",
-                            headers={"Cache-Control": "no-cache"})
 
     return app

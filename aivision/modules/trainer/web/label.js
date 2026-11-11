@@ -1,4 +1,4 @@
-/* 데이터셋·라벨링 화면의 동작. 서버는 dataset_api.py.
+/* 데이터셋·라벨링 탭의 동작. 서버는 dataset_api.py. (학습·평가 플러그인 화면 — index.html)
  *
  * 박스는 늘 0~1 정규화 좌표로 들고 있다(YOLO 라벨과 같은 단위). 화면 좌표는 그릴 때와
  * 마우스를 읽을 때만 계산한다 — 확대·이동을 몇 번 해도 박스가 밀리지 않는다.
@@ -305,6 +305,7 @@ function resize() {
   cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (keep) { S.view.ox = cw / 2 - keep.cx * S.view.s; S.view.oy = ch / 2 - keep.cy * S.view.s; }
+  else if (S.img && cw) fit();       // 숨긴 탭에서 열린 이미지 — 보이는 순간 화면에 맞춘다
   draw();
 }
 new ResizeObserver(resize).observe($("canvas-wrap"));
@@ -522,6 +523,8 @@ cv.addEventListener("mouseleave", () => { hover = null; draw(); });
 /* ── 키보드 ───────────────────────────────────────────────────────── */
 
 window.addEventListener("keydown", (e) => {
+  // 평가 탭을 보는 동안에는 라벨링 단축키(Enter·X·A·D …)가 숨은 편집기를 건드리지 않게.
+  if (document.getElementById("tab-label")?.hidden) return;
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "select" || tag === "textarea") {
     if (e.key === "Escape") e.target.blur();
@@ -826,7 +829,7 @@ $("to-eval").addEventListener("click", async () => {
   try {
     await saveIfDirty();
     const r = await postJSON(`/api/datasets/${enc(S.ds)}/to-eval`, { name, status: "ok" });
-    msg(`평가 세트 ${r.set} (${r.images}장)을 만들었습니다 — 모델·설정 화면 아래 '이미지 판별률 평가' 에서 고르세요`, "ok", true);
+    msg(`평가 세트 ${r.set} (${r.images}장)을 만들었습니다 — 위쪽 '이미지 판별률 평가' 탭에서 고르세요`, "ok", true);
   } catch (e) { msg(e.message, "err"); }
 });
 

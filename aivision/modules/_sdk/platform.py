@@ -83,5 +83,6 @@ class Platform:
                          options=row.get("options") or {})
                 for row in data.get("items", [])]
 
-    def heartbeat(self, status: dict) -> None:
-        self._call("POST", f"/api/modules/{self.module_id}/heartbeat", status)
+    def heartbeat(self, status: dict) -> bool:
+        """살아 있다고 알린다. 못 알렸으면 False — 등록이 지워졌을 수 있다(다시 등록할 때)."""
+        return self._call("POST", f"/api/modules/{self.module_id}/heartbeat", status) is not None

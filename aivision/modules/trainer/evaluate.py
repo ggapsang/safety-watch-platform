@@ -11,6 +11,8 @@
 **판독은 플러그인과 똑같이 한다.** 모델 파일, 클래스 표(끈 클래스·표시 이름), 임계값을
 객체감지 플러그인의 설정에서 그대로 읽는다. 시험 결과가 실제 관제 화면과 다르면 시험의
 의미가 없다 — 그래서 판독 코드도 따로 쓰지 않고 플러그인의 inference 모듈을 그대로 쓴다.
+이 파일은 학습·평가 플러그인(mod-trainer)에 있지만, 그 이미지는 객체감지의 inference·config·
+settings 를 그대로 복사해 담고 모델 폴더(/models)를 읽기 전용으로 붙인다(trainer/Dockerfile).
 
 **'일치' 는 객체 단위로 본다.** 한 이미지 안의 정답 객체가 모두 같은 클래스로 IoU 0.5 이상
 겹치게 잡히고, 정답에 없는 탐지(헛탐지)가 하나도 없어야 그 이미지는 일치다. 정답 객체가
@@ -21,8 +23,8 @@
 COCO 모델의 "person")를 여기로 옮긴다 — `DEFAULT_MAP`.
 
 실행
-  docker compose exec mod-yolo python evaluate.py /eval/kaist
-  docker compose exec mod-yolo python evaluate.py /eval/kaist --predict-only   정답 없이 판독만
+  docker compose exec mod-trainer python evaluate.py /eval/kaist
+  docker compose exec mod-trainer python evaluate.py /eval/kaist --predict-only   정답 없이 판독만
 
 데이터 배치(정답 라벨링 툴이 내보내는 모양 그대로 받는다)
   /eval/kaist/images/*.jpg          이미지 (또는 세트 폴더 바로 아래, 또는 obj_train_data/)
@@ -213,9 +215,7 @@ class Detector:
         if not self.paths:
             raise EvalError("판독할 모델이 없습니다 — 객체감지 플러그인에서 공통 모델을 켜거나 "
                             "--models 로 지정하세요")
-        from main import _short_side_px             # 실시간 워커와 같은 크기 거르기
-
-        self._short_side_px = _short_side_px
+        self._short_side_px = inference.short_side_px   # 실시간 워커와 같은 크기 거르기
         self.map = {k.lower(): v for k, v in (class_map or DEFAULT_MAP).items()}
         self.engines = []
         for path in self.paths:

@@ -99,8 +99,13 @@ export function ModuleFrame() {
         </p>
       )}
       {/* 플러그인 화면 위에 둔다. '왜 아무것도 안 하지' 를 보는 사람이 바로 여기 있고,
-        * 관리자 화면 어딘가에 두면 거기까지 가지 않는다. */}
-      <ModuleCameras mod={mod} />
+        * 관리자 화면 어딘가에 두면 거기까지 가지 않는다.
+        *
+        * 영상을 보지 않는 플러그인(학습·평가 등)은 heartbeat 에 `uses_cameras: false` 를
+        * 실어 보낸다. 그런 플러그인에 '고르지 않으면 아무것도 하지 않습니다' 를 펼쳐 두면
+        * 할 일 없는 칸이 화면을 밀고, 고장으로 읽힌다. 코어는 이 표시만 볼 뿐 플러그인이
+        * 무엇인지는 여전히 모른다. */}
+      {mod.last_status?.uses_cameras !== false && <ModuleCameras mod={mod} />}
 
       <Card padded={false} className="overflow-hidden">
         <iframe

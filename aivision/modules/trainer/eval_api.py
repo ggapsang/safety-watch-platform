@@ -51,8 +51,9 @@ class RunIn(BaseModel):
     predict_only: bool = False
 
 
-def mount(app: FastAPI, cfg) -> None:
-    """평가 API 를 앱에 붙인다."""
+def mount(app: FastAPI, load_cfg) -> None:
+    """평가 API 를 앱에 붙인다. `load_cfg` 는 객체감지 설정을 새로 읽는 함수 — 평가마다
+    그 순간 객체감지 화면에 켜 둔 모델·민감도로 판독한다."""
     lock = threading.Lock()
     # 지금(또는 마지막으로) 돈 평가. 끝난 평가의 결과는 폴더(summary.json)에서 읽는다 —
     # 이것은 '도는 중' 과 '실패' 를 보여 주는 데만 쓴다.
@@ -204,7 +205,7 @@ def mount(app: FastAPI, cfg) -> None:
 
         def work():
             try:
-                evaluate.evaluate(set_dir, cfg, out_dir=out,
+                evaluate.evaluate(set_dir, load_cfg(), out_dir=out,
                                   predict_only=body.predict_only, progress=progress)
                 job["status"] = "done"
                 log.info("평가 끝: %s/%s", set_name, out.name)
