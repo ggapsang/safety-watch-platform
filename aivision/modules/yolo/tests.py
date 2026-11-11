@@ -453,9 +453,44 @@ def test_evaluation() -> None:
         check(len(imgs) == 2, "결과 폴더의 이미지는 데이터가 아니다")
 
 
+def test_labeling() -> None:
+    """데이터셋·라벨링(dataset_api.py) — 라벨 파일 읽고 쓰기와 초안 클래스 잇기."""
+    print("라벨링")
+    import tempfile
+
+    import dataset_api as da
+
+    # ── 쓰고 다시 읽으면 같은 박스. 뒤집힌 박스(오른쪽에서 왼쪽으로 끈 것)는 바로 세운다
+    boxes = [{"cls": 0, "x1": .1, "y1": .2, "x2": .3, "y2": .5},
+             {"cls": 1, "x1": .9, "y1": .8, "x2": .6, "y2": .4}]
+    text = da.yolo_text(boxes)
+    check(text.splitlines()[0] == "0 0.200000 0.350000 0.200000 0.300000", "YOLO 줄: cls cx cy w h")
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "a.txt"
+        p.write_text(text + "# 메모\n\nbad line\n", encoding="utf-8")
+        back = da.read_boxes(p)
+        check(len(back) == 2 and back[1]["x1"] == 0.6 and back[1]["y2"] == 0.8,
+              "뒤집힌 박스를 세워 저장하고, 주석·깨진 줄은 건너뛰어 읽는다")
+        check(all(abs(back[0][k] - boxes[0][k]) < 1e-6 for k in ("x1", "y1", "x2", "y2")),
+              "쓰고 읽은 좌표가 같다")
+    check(da.yolo_text([{"cls": 0, "x1": .5, "y1": .5, "x2": .5, "y2": .6}]) == "",
+          "폭이 0 인 박스(클릭 한 번)는 저장하지 않는다")
+    check(da.yolo_text([]) == "", "박스가 없으면 빈 파일 — '아무것도 없다' 는 정답")
+    check(da.yolo_text([{"cls": 0, "x1": -.2, "y1": .1, "x2": 1.4, "y2": .3}]).split()[1:4:2]
+          == ["0.500000", "1.000000"], "이미지 밖으로 나간 박스는 안쪽으로 자른다")
+
+    # ── 초안: 모델 클래스(person, AMR)를 데이터셋 클래스 번호로
+    cmap, index = da.class_map_for(["AMR", "Human"])
+    check(cmap["person"] == "Human" and index["Human"] == 1 and index["AMR"] == 0,
+          "COCO 의 person 은 데이터셋의 Human 으로 간다")
+    cmap, index = da.class_map_for(["사람", "로봇", "forklift"])
+    check(index["Human"] == 0 and index["AMR"] == 1 and index["forklift"] == 2,
+          "데이터셋 클래스를 한글로 지어도 초안이 붙는다")
+
+
 def main() -> int:
     for fn in (test_output_shapes, test_scale_back, test_debounce, test_platform_contract,
-               test_settings_store, test_evaluation, test_training_is_gone):
+               test_settings_store, test_evaluation, test_labeling, test_training_is_gone):
         fn()
     print(f"\n검증 {CHECKS}개 통과 ({time.strftime('%H:%M:%S')})")
     return 0

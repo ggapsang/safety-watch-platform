@@ -457,6 +457,11 @@ def create_app(cfg, runner_status: Callable[[], dict],
     import eval_api
     eval_api.mount(app, cfg)
 
+    # ── 데이터셋·라벨링 ─────────────────────────────────────────────
+    # 이미지를 보고 박스를 쳐서 YOLO 라벨로 쌓는다(dataset_api.py, 화면은 label.html).
+    import dataset_api
+    dataset_api.mount(app, cfg)
+
     # ── 화면 ────────────────────────────────────────────────────────
 
     @app.get("/")
@@ -466,5 +471,14 @@ def create_app(cfg, runner_status: Callable[[], dict],
     @app.get("/app.js")
     async def script() -> FileResponse:
         return FileResponse(str(WEB / "app.js"), media_type="application/javascript")
+
+    @app.get("/label")
+    async def label_page() -> FileResponse:
+        return FileResponse(str(WEB / "label.html"), headers={"Cache-Control": "no-cache"})
+
+    @app.get("/label.js")
+    async def label_script() -> FileResponse:
+        return FileResponse(str(WEB / "label.js"), media_type="application/javascript",
+                            headers={"Cache-Control": "no-cache"})
 
     return app
